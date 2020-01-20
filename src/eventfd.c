@@ -47,6 +47,13 @@ static PyMemberDef EventfdObject_members[] = {
     {NULL}  /* Sentinel */
 };
 
+static PyObject* EventFD_repr(EventfdObject *self) {
+    return PyUnicode_FromFormat(
+        "<%s as %p: fp=%i>",
+        Py_TYPE(self)->tp_name, self, self->fileno
+    );
+}
+
 static PyTypeObject
 EventFDType = {
     PyVarObject_HEAD_INIT(NULL, 0)
@@ -59,6 +66,7 @@ EventFDType = {
     .tp_init = (initproc) EventfdObject_init,
     .tp_dealloc = (destructor) EventfdObject_dealloc,
     .tp_members = EventfdObject_members,
+    .tp_repr = (reprfunc) EventFD_repr
 };
 
 static PyModuleDef

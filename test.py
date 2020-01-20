@@ -7,6 +7,7 @@ ctx = AIOContext(16)
 print(ctx)
 
 efd = EventFD()
+print(efd)
 
 op = AIOOperation.read(16, ctx, efd, 1, 0)
 
