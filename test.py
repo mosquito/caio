@@ -4,6 +4,8 @@ from linux_aio.operation import AIOOperation
 
 
 ctx = AIOContext(16)
+print(ctx)
+
 efd = EventFD()
 
 op = AIOOperation.read(16, ctx, efd, 1, 0)

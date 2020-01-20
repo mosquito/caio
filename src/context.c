@@ -79,6 +79,14 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
     return 0;
 }
 
+static PyObject* AIOContext_repr(AIOContext *self) {
+    return PyUnicode_FromFormat(
+        "<%s as %p: max_requests=%i>",
+        Py_TYPE(self)->tp_name, self, self->max_requests
+    );
+}
+
+
 /*
     AIOContext properties
 */
@@ -115,6 +123,7 @@ AIOContextType = {
     .tp_init = (initproc) AIOContext_init,
     .tp_dealloc = (destructor) AIOContext_dealloc,
     .tp_members = AIOContext_members,
+    .tp_repr = (reprfunc) AIOContext_repr
 };
 
 /*

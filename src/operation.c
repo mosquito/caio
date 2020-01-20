@@ -76,8 +76,9 @@ static PyObject* AIOOperation_repr(AIOOperation *self) {
     }
 
     return PyUnicode_FromFormat(
-        "<AIOOperation: mode=\"%s\", fd=%i, offset=%i>",
-        mode, self->iocb.aio_fildes, self->iocb.aio_offset
+        "<%s at %p: mode=\"%s\", fd=%i, offset=%i>",
+        Py_TYPE(self)->tp_name, self, mode,
+        self->iocb.aio_fildes, self->iocb.aio_offset
     );
 }
 
