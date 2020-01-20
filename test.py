@@ -4,9 +4,9 @@ from linux_aio.operation import AIOOperation
 
 
 ctx = AIOContext(16)
-efd = EventFD(16)
+efd = EventFD()
 
-op = AIOOperation.read(16, ctx, efd, 1)
+op = AIOOperation.read(16, ctx, efd, 1, 0)
 
 print(op)
 print(op.fileno)

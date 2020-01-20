@@ -36,6 +36,11 @@ EventfdObject_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
     return (PyObject *) self;
 }
 
+static int EventfdObject_init(PyObject* self, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {NULL};
+    return PyArg_ParseTupleAndKeywords(args, kwds, "", kwlist);
+}
+
 static PyMemberDef EventfdObject_members[] = {
     {"fileno", T_INT, offsetof(EventfdObject, fileno), READONLY,
      "file descritptor"},
@@ -51,6 +56,7 @@ EventFDType = {
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_new = EventfdObject_new,
+    .tp_init = (initproc) EventfdObject_init,
     .tp_dealloc = (destructor) EventfdObject_dealloc,
     .tp_members = EventfdObject_members,
 };

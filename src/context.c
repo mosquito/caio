@@ -29,6 +29,7 @@ inline int io_getevents(aio_context_t ctx, long min_nr, long max_nr,
 typedef struct {
     PyObject_HEAD
     aio_context_t ctx;
+    unsigned max_requests;
 } AIOContext;
 
 
@@ -59,18 +60,18 @@ static int
 AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
 {
     static char *kwlist[] = {"max_requests", NULL};
-    size_t *max_requests = 0;
+    self->max_requests = 0;
     self->ctx = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|I", kwlist, &max_requests)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|I", kwlist, &self->max_requests)) {
         return -1;
     }
 
-    if (max_requests == 0) {
-        return -1;
+    if (self->max_requests == 0) {
+        self->max_requests = 32;
     }
 
-    if (io_setup(max_requests, &(self->ctx)) < 0) {
+    if (io_setup(self->max_requests, &(self->ctx)) < 0) {
         PyErr_SetFromErrno(PyExc_SystemError);
         return -1;
     }
@@ -88,6 +89,13 @@ static PyMemberDef AIOContext_members[] = {
         offsetof(AIOContext, ctx),
         READONLY,
         "context value descriptor"
+    },
+    {
+        "max_requests",
+        T_USHORT,
+        offsetof(AIOContext, max_requests),
+        READONLY,
+        "max requests"
     },
     {NULL}  /* Sentinel */
 };

@@ -86,8 +86,9 @@ static PyObject* AIOOperation_repr(AIOOperation *self) {
     AIOOperation.read classmethod definition
 */
 PyDoc_STRVAR(AIOOperation_read_docstring,
-    "Classmethod creates a new instance of AIOOperation on read mode.\n\n"
+    "Creates a new instance of AIOOperation on read mode.\n\n"
     "    AIOOpeartion.read(\n"
+    "        nbytes: int,\n"
     "        aio_context: AIOContext,\n"
     "        eventfd: EventFD,\n"
     "        fd: int, \n"
@@ -186,7 +187,7 @@ static PyObject* AIOOperation_read(
     AIOOperation.write classmethod definition
 */
 PyDoc_STRVAR(AIOOperation_write_docstring,
-    "Classmethod creates a new instance of AIOOperation on write mode.\n\n"
+    "Creates a new instance of AIOOperation on write mode.\n\n"
     "    AIOOpeartion.write(\n"
     "        payload_bytes: bytes,\n"
     "        aio_context: AIOContext,\n"
@@ -297,7 +298,7 @@ static PyObject* AIOOperation_write(
     AIOOperation.fsync classmethod definition
 */
 PyDoc_STRVAR(AIOOperation_fsync_docstring,
-    "Classmethod creates a new instance of AIOOperation on fsync mode.\n\n"
+    "Creates a new instance of AIOOperation on fsync mode.\n\n"
     "    AIOOpeartion.fsync(\n"
     "        aio_context: AIOContext,\n"
     "        eventfd: EventFD,\n"
@@ -378,7 +379,7 @@ static PyObject* AIOOperation_fsync(
     AIOOperation.fdsync classmethod definition
 */
 PyDoc_STRVAR(AIOOperation_fdsync_docstring,
-    "Classmethod creates a new instance of AIOOperation on fdsync mode.\n\n"
+    "Creates a new instance of AIOOperation on fdsync mode.\n\n"
     "    AIOOpeartion.fdsync(\n"
     "        aio_context: AIOContext,\n"
     "        eventfd: EventFD,\n"
