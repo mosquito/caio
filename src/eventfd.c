@@ -1,15 +1,4 @@
-#include <sys/eventfd.h>
-#include <unistd.h>
-
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
-#include <structmember.h>
-
-
-typedef struct {
-    PyObject_HEAD
-    int fileno;
-} EventfdObject;
+#include "linux_aio.h"
 
 
 static void

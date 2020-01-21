@@ -1,28 +1,11 @@
-#include <stdio.h>
-#include <stdlib.h>
-
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
-#include <structmember.h>
+#include "linux_aio.h"
 
 
-#include <linux/aio_abi.h>
 const size_t iocb_size = sizeof(struct iocb);
 
 
 PyObject *EventFDClass = NULL;
 PyObject *ContextClass = NULL;
-
-
-typedef struct {
-    PyObject_HEAD
-    PyObject* eventfd;
-    PyObject* context;
-    PyObject* py_buffer;
-    int64_t raw_context;
-    char* buffer;
-    struct iocb iocb;
-} AIOOperation;
 
 
 static void
@@ -76,9 +59,9 @@ static PyObject* AIOOperation_repr(AIOOperation *self) {
     }
 
     return PyUnicode_FromFormat(
-        "<%s at %p: mode=\"%s\", fd=%i, offset=%i>",
+        "<%s at %p: mode=\"%s\", fd=%i, offset=%i, buffer=%p>",
         Py_TYPE(self)->tp_name, self, mode,
-        self->iocb.aio_fildes, self->iocb.aio_offset
+        self->iocb.aio_fildes, self->iocb.aio_offset, self->iocb.aio_buf
     );
 }
 
@@ -103,10 +86,7 @@ static PyObject* AIOOperation_read(
 ) {
     AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
 
-    static char *kwlist[] = {
-        "nbytes", "aio_context", "eventfd", "fd", "offset", "priority",
-        NULL
-    };
+    static char *kwlist[] = {"nbytes", "fd", "offset", "priority", NULL};
 
     if (self == NULL) {
         PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
@@ -123,34 +103,14 @@ static PyObject* AIOOperation_read(
     uint64_t nbytes = 0;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "KOOI|LH", kwlist,
+        args, kwds, "KI|LH", kwlist,
         &nbytes,
-        &(self->context),
-        &(self->eventfd),
         &(self->iocb.aio_fildes),
         &(self->iocb.aio_offset),
         &(self->iocb.aio_reqprio)
     );
 
     if (!argIsOk) return NULL;
-
-    if (self->context == NULL || PyObject_IsInstance(self->context, ContextClass) == 0) {
-        Py_XDECREF(self);
-        PyErr_SetString(
-            PyExc_ValueError,
-            "context argument must be instance of AIOContext class"
-        );
-        return NULL;
-    }
-
-    if (self->eventfd == NULL || PyObject_IsInstance(self->eventfd, EventFDClass) == 0) {
-        Py_XDECREF(self);
-        PyErr_SetString(
-            PyExc_ValueError,
-            "eventfd argument must be instance of EventFD class"
-        );
-        return NULL;
-    }
 
     if (nbytes == 0) {
         Py_XDECREF(self);
@@ -163,21 +123,10 @@ static PyObject* AIOOperation_read(
 
     self->buffer = calloc(nbytes, sizeof(char));
     self->iocb.aio_buf = (uint64_t) self->buffer;
+    self->iocb.aio_nbytes = nbytes;
     self->py_buffer = PyMemoryView_FromMemory(self->buffer, nbytes, PyBUF_READ);
 
-    Py_INCREF(self->context);
-    Py_INCREF(self->eventfd);
     Py_INCREF(self->py_buffer);
-
-    self->iocb.aio_flags = IOCB_FLAG_RESFD;
-
-    self->iocb.aio_resfd = PyLong_AsLongLong(
-        PyObject_GetAttrString(self->eventfd, "fileno")
-    );
-
-    self->raw_context = PyLong_AsLongLong(
-        PyObject_GetAttrString(self->context, "value")
-    );
 
     self->iocb.aio_lio_opcode = IOCB_CMD_PREAD;
 
@@ -191,8 +140,6 @@ PyDoc_STRVAR(AIOOperation_write_docstring,
     "Creates a new instance of AIOOperation on write mode.\n\n"
     "    AIOOpeartion.write(\n"
     "        payload_bytes: bytes,\n"
-    "        aio_context: AIOContext,\n"
-    "        eventfd: EventFD,\n"
     "        fd: int, \n"
     "        offset: int,\n"
     "        priority=0\n"
@@ -204,10 +151,7 @@ static PyObject* AIOOperation_write(
 ) {
     AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
 
-    static char *kwlist[] = {
-        "payload_bytes", "aio_context", "eventfd", "fd", "offset", "priority",
-        NULL
-    };
+    static char *kwlist[] = {"payload_bytes", "fd", "offset", "priority", NULL};
 
     if (self == NULL) {
         PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
@@ -224,34 +168,14 @@ static PyObject* AIOOperation_write(
     Py_ssize_t nbytes = 0;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "OOOI|LH", kwlist,
+        args, kwds, "OI|LH", kwlist,
         &(self->py_buffer),
-        &(self->context),
-        &(self->eventfd),
         &(self->iocb.aio_fildes),
         &(self->iocb.aio_offset),
         &(self->iocb.aio_reqprio)
     );
 
     if (!argIsOk) return NULL;
-
-    if (self->context == NULL || PyObject_IsInstance(self->context, ContextClass) == 0) {
-        Py_XDECREF(self);
-        PyErr_SetString(
-            PyExc_ValueError,
-            "context argument must be instance of AIOContext class"
-        );
-        return NULL;
-    }
-
-    if (self->eventfd == NULL || PyObject_IsInstance(self->eventfd, EventFDClass) == 0) {
-        Py_XDECREF(self);
-        PyErr_SetString(
-            PyExc_ValueError,
-            "eventfd argument must be instance of EventFD class"
-        );
-        return NULL;
-    }
 
     if (!PyBytes_Check(self->py_buffer)) {
         Py_XDECREF(self);
@@ -262,22 +186,9 @@ static PyObject* AIOOperation_write(
         return NULL;
     }
 
-    Py_INCREF(self->context);
-    Py_INCREF(self->eventfd);
     Py_INCREF(self->py_buffer);
 
-    self->iocb.aio_flags = IOCB_FLAG_RESFD;
-
-    self->iocb.aio_resfd = PyLong_AsLongLong(
-        PyObject_GetAttrString(self->eventfd, "fileno")
-    );
-
-    self->raw_context = PyLong_AsLongLong(
-        PyObject_GetAttrString(self->context, "value")
-    );
-
     self->iocb.aio_lio_opcode = IOCB_CMD_PWRITE;
-    self->iocb.aio_reqprio = 0;
 
     if (PyBytes_AsStringAndSize(
             self->py_buffer,
@@ -313,10 +224,7 @@ static PyObject* AIOOperation_fsync(
 ) {
     AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
 
-    static char *kwlist[] = {
-        "aio_context", "eventfd", "fd", "priority",
-        NULL
-    };
+    static char *kwlist[] = {"fd", "priority", NULL};
 
     if (self == NULL) {
         PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
@@ -331,46 +239,12 @@ static PyObject* AIOOperation_fsync(
     self->py_buffer = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "OOI|H", kwlist,
-        &(self->context),
-        &(self->eventfd),
+        args, kwds, "I|H", kwlist,
         &(self->iocb.aio_fildes),
         &(self->iocb.aio_reqprio)
     );
 
     if (!argIsOk) return NULL;
-
-    if (self->context == NULL || PyObject_IsInstance(self->context, ContextClass) == 0) {
-        Py_XDECREF(self);
-        PyErr_SetString(
-            PyExc_ValueError,
-            "context argument must be instance of AIOContext class"
-        );
-        return NULL;
-    }
-
-    if (self->eventfd == NULL || PyObject_IsInstance(self->eventfd, EventFDClass) == 0) {
-        Py_XDECREF(self);
-        PyErr_SetString(
-            PyExc_ValueError,
-            "eventfd argument must be instance of EventFD class"
-        );
-        return NULL;
-    }
-
-    Py_INCREF(self->context);
-    Py_INCREF(self->eventfd);
-
-    self->iocb.aio_flags = IOCB_FLAG_RESFD;
-    self->iocb.aio_resfd = PyLong_AsLongLong(
-        PyObject_GetAttrString(self->eventfd, "fileno")
-    );
-
-    self->raw_context = PyLong_AsLongLong(
-        PyObject_GetAttrString(self->context, "value")
-    );
-
-    self->iocb.aio_lio_opcode = IOCB_CMD_FSYNC;
 
 	return (PyObject*) self;
 }
@@ -394,10 +268,7 @@ static PyObject* AIOOperation_fdsync(
 ) {
     AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
 
-    static char *kwlist[] = {
-        "aio_context", "eventfd", "fd", "priority",
-        NULL
-    };
+    static char *kwlist[] = {"fd", "priority", NULL};
 
     if (self == NULL) {
         PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
@@ -406,50 +277,16 @@ static PyObject* AIOOperation_fdsync(
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
-    self->context = NULL;
-    self->eventfd = NULL;
     self->buffer = NULL;
     self->py_buffer = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "OOI|H", kwlist,
-        &(self->context),
-        &(self->eventfd),
+        args, kwds, "I|H", kwlist,
         &(self->iocb.aio_fildes),
         &(self->iocb.aio_reqprio)
     );
 
     if (!argIsOk) return NULL;
-
-    if (self->context == NULL || PyObject_IsInstance(self->context, ContextClass) == 0) {
-        Py_XDECREF(self);
-        PyErr_SetString(
-            PyExc_ValueError,
-            "context argument must be instance of AIOContext class"
-        );
-        return NULL;
-    }
-
-    if (self->eventfd == NULL || PyObject_IsInstance(self->eventfd, EventFDClass) == 0) {
-        Py_XDECREF(self);
-        PyErr_SetString(
-            PyExc_ValueError,
-            "eventfd argument must be instance of EventFD class"
-        );
-        return NULL;
-    }
-
-    Py_INCREF(self->context);
-    Py_INCREF(self->eventfd);
-
-    self->iocb.aio_flags = IOCB_FLAG_RESFD;
-    self->iocb.aio_resfd = PyLong_AsLongLong(
-        PyObject_GetAttrString(self->eventfd, "fileno")
-    );
-
-    self->raw_context = PyLong_AsLongLong(
-        PyObject_GetAttrString(self->context, "value")
-    );
 
     self->iocb.aio_lio_opcode = IOCB_CMD_FDSYNC;
 
@@ -457,7 +294,7 @@ static PyObject* AIOOperation_fdsync(
 }
 
 /*
-    AIOOperation.get_value classmethod definition
+    AIOOperation.get_value method definition
 */
 PyDoc_STRVAR(AIOOperation_get_value_docstring,
     "Method returns a bytes value of AIOOperation's result or None.\n\n"
@@ -479,6 +316,71 @@ static PyObject* AIOOperation_get_value(
 
     return NULL;
 }
+
+/*
+    AIOOperation.submit method definition
+*/
+PyDoc_STRVAR(AIOOperation_submit_docstring,
+    "Submit operation to kernel space.\n\n"
+    "    AIOOpeartion.submit(aio_context, eventfd)"
+);
+
+static PyObject* AIOOperation_submit(
+    AIOOperation *self, PyObject *args, PyObject *kwds
+) {
+    static char *kwlist[] = {"aio_context", "eventfd", NULL};
+
+    int argIsOk = PyArg_ParseTupleAndKeywords(
+        args, kwds, "OO", kwlist,
+        &(self->context),
+        &(self->eventfd)
+    );
+
+    if (!argIsOk) return NULL;
+
+    if (self->context == NULL || PyObject_IsInstance(self->context, ContextClass) == 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "context argument must be instance of AIOContext class"
+        );
+        return NULL;
+    }
+
+    if (self->eventfd == NULL || PyObject_IsInstance(self->eventfd, EventFDClass) == 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "eventfd argument must be instance of EventFD class"
+        );
+        return NULL;
+    }
+
+    Py_INCREF(self->context);
+    Py_INCREF(self->eventfd);
+
+    self->iocb.aio_flags |= IOCB_FLAG_RESFD;
+    self->iocb.aio_resfd = self->eventfd->fileno;
+
+    int64_t context = self->context->ctx;
+
+    struct iocb* cb = &self->iocb;
+    struct iocb** cbpp = &cb;
+
+    if (*cbpp == NULL) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "Invalid state"
+        );
+        return NULL;
+    }
+
+    int result = io_submit(context, 1, cbpp);
+    if (result <= 0) {
+        PyErr_SetFromErrno(PyExc_SystemError);
+    };
+
+    return (PyObject*) PyLong_FromSsize_t(result);
+}
+
 
 /*
     AIOOperation properties
@@ -549,6 +451,11 @@ static PyMethodDef AIOOperation_methods[] = {
         "get_value",
         (PyCFunction) AIOOperation_get_value, METH_NOARGS,
         AIOOperation_get_value_docstring
+    },
+    {
+        "submit",
+        (PyCFunction) AIOOperation_submit, METH_VARARGS | METH_KEYWORDS,
+        AIOOperation_submit_docstring
     },
     {NULL}  /* Sentinel */
 };

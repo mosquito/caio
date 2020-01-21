@@ -1,36 +1,4 @@
-#include <linux/aio_abi.h>
-
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
-#include <structmember.h>
-
-
-#include <sys/syscall.h>
-#include <linux/aio_abi.h>
-
-inline int io_setup(unsigned nr, aio_context_t *ctxp) {
-	return syscall(__NR_io_setup, nr, ctxp);
-}
-
-inline int io_destroy(aio_context_t ctx) {
-	return syscall(__NR_io_destroy, ctx);
-}
-
-inline int io_submit(aio_context_t ctx, long nr, struct iocb **iocbpp) {
-	return syscall(__NR_io_submit, ctx, nr, iocbpp);
-}
-
-inline int io_getevents(aio_context_t ctx, long min_nr, long max_nr,
-		struct io_event *events, struct timespec *timeout) {
-	return syscall(__NR_io_getevents, ctx, min_nr, max_nr, events, timeout);
-}
-
-
-typedef struct {
-    PyObject_HEAD
-    aio_context_t ctx;
-    unsigned max_requests;
-} AIOContext;
+#include "linux_aio.h"
 
 
 static void
@@ -67,11 +35,11 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    if (self->max_requests == 0) {
+    if (self->max_requests <= 0) {
         self->max_requests = 32;
     }
 
-    if (io_setup(self->max_requests, &(self->ctx)) < 0) {
+    if (io_setup(self->max_requests, &self->ctx) < 0) {
         PyErr_SetFromErrno(PyExc_SystemError);
         return -1;
     }
@@ -81,8 +49,8 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
 
 static PyObject* AIOContext_repr(AIOContext *self) {
     return PyUnicode_FromFormat(
-        "<%s as %p: max_requests=%i>",
-        Py_TYPE(self)->tp_name, self, self->max_requests
+        "<%s as %p: max_requests=%i, ctx=%lli>",
+        Py_TYPE(self)->tp_name, self, self->max_requests, self->ctx
     );
 }
 
