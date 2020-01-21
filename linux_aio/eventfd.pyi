@@ -1,6 +1,0 @@
-class EventFD:
-    def __init__(self): ...
-
-    # noinspection PyPropertyDefinition
-    @property
-    def fileno(self) -> int: ...

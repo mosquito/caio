@@ -6,8 +6,6 @@ setup(
     version='0.0.1',
     packages=find_packages(exclude=['tests']),
     ext_modules=[
-        Extension('linux_aio.eventfd', ['src/eventfd.c']),
-        Extension('linux_aio.operation', ['src/operation.c']),
-        Extension('linux_aio.context', ['src/context.c']),
+        Extension('linux_aio', ['linux_aio.c']),
     ]
 )

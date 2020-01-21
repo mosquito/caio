@@ -1,7 +1,19 @@
 from typing import Optional, Union
 
-from .context import AIOContext
-from .eventfd import EventFD
+
+# noinspection PyPropertyDefinition
+class AIOContext:
+    def __init__(self, max_requests: int): ...
+
+    def submit(self, *aio_operations) -> int: ...
+
+
+class EventFD:
+    def __init__(self): ...
+
+    # noinspection PyPropertyDefinition
+    @property
+    def fileno(self) -> int: ...
 
 
 # noinspection PyPropertyDefinition

@@ -1,11 +1,248 @@
-#include "linux_aio.h"
+#include <linux/aio_abi.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/eventfd.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+#include <structmember.h>
 
 
-const size_t iocb_size = sizeof(struct iocb);
+inline int io_setup(unsigned nr, aio_context_t *ctxp) {
+	return syscall(__NR_io_setup, nr, ctxp);
+}
 
 
-PyObject *EventFDClass = NULL;
-PyObject *ContextClass = NULL;
+inline int io_destroy(aio_context_t ctx) {
+	return syscall(__NR_io_destroy, ctx);
+}
+
+
+inline int io_getevents(aio_context_t ctx, long min_nr, long max_nr,
+		struct io_event *events, struct timespec *timeout) {
+	return syscall(__NR_io_getevents, ctx, min_nr, max_nr, events, timeout);
+}
+
+
+inline int io_submit(aio_context_t ctx, long nr, struct iocb **iocbpp) {
+	return syscall(__NR_io_submit, ctx, nr, iocbpp);
+}
+
+
+typedef struct {
+    PyObject_HEAD
+    int fileno;
+} EventFD;
+
+
+typedef struct {
+    PyObject_HEAD
+    aio_context_t ctx;
+    unsigned max_requests;
+} AIOContext;
+
+
+typedef struct {
+    PyObject_HEAD
+    EventFD* eventfd;
+    AIOContext* context;
+    PyObject* py_buffer;
+    char* buffer;
+    struct iocb iocb;
+} AIOOperation;
+
+
+static void
+EventFD_dealloc(EventFD *self) {
+    if (self->fileno > 0) close(self->fileno);
+    Py_TYPE(self)->tp_free((PyObject *) self);
+}
+
+static PyObject *
+EventFD_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    EventFD *self;
+
+    self = (EventFD *) type->tp_alloc(type, 0);
+
+    if (self != NULL) {
+        self->fileno = eventfd(0, 0);
+
+        if (self->fileno <= 0) {
+            PyErr_SetFromErrno(PyExc_SystemError);
+            return NULL;
+        }
+    }
+
+    return (PyObject *) self;
+}
+
+static int EventFD_init(PyObject* self, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {NULL};
+    return PyArg_ParseTupleAndKeywords(args, kwds, "", kwlist);
+}
+
+static PyMemberDef EventFD_members[] = {
+    {"fileno", T_INT, offsetof(EventFD, fileno), READONLY,
+     "file descritptor"},
+    {NULL}  /* Sentinel */
+};
+
+static PyObject* EventFD_repr(EventFD *self) {
+    return PyUnicode_FromFormat(
+        "<%s as %p: fp=%i>",
+        Py_TYPE(self)->tp_name, self, self->fileno
+    );
+}
+
+static PyTypeObject
+EventFDType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "eventfd.EventFD",
+    .tp_doc = "linux EventFD descriptor",
+    .tp_basicsize = sizeof(EventFD),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = EventFD_new,
+    .tp_init = (initproc) EventFD_init,
+    .tp_dealloc = (destructor) EventFD_dealloc,
+    .tp_members = EventFD_members,
+    .tp_repr = (reprfunc) EventFD_repr
+};
+
+
+static void
+AIOContext_dealloc(AIOContext *self) {
+    if (self->ctx != 0) {
+        aio_context_t ctx = self->ctx;
+        self->ctx = 0;
+
+        io_destroy(ctx);
+    }
+
+    Py_TYPE(self)->tp_free((PyObject *) self);
+}
+
+/*
+    AIOContext.__new__ classmethod definition
+*/
+static PyObject *
+AIOContext_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    AIOContext *self;
+
+    self = (AIOContext *) type->tp_alloc(type, 0);
+    return (PyObject *) self;
+}
+
+static int
+AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
+{
+    static char *kwlist[] = {"max_requests", NULL};
+    self->max_requests = 0;
+    self->ctx = 0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|I", kwlist, &self->max_requests)) {
+        return -1;
+    }
+
+    if (self->max_requests <= 0) {
+        self->max_requests = 32;
+    }
+
+    if (io_setup(self->max_requests, &self->ctx) < 0) {
+        PyErr_SetFromErrno(PyExc_SystemError);
+        return -1;
+    }
+
+    return 0;
+}
+
+static PyObject* AIOContext_repr(AIOContext *self) {
+    return PyUnicode_FromFormat(
+        "<%s as %p: max_requests=%i, ctx=%lli>",
+        Py_TYPE(self)->tp_name, self, self->max_requests, self->ctx
+    );
+}
+
+
+/*
+    AIOContext properties
+*/
+static PyMemberDef AIOContext_members[] = {
+    {
+        "max_requests",
+        T_USHORT,
+        offsetof(AIOContext, max_requests),
+        READONLY,
+        "max requests"
+    },
+    {NULL}  /* Sentinel */
+};
+
+
+PyDoc_STRVAR(AIOContext_submit_docstring,
+    "Accepts multiple AIOOperations. Returns \n\n"
+    "    AIOOpeartion.submit(aio_op1, aio_op2, aio_opN, ...) -> int"
+);
+static PyObject* AIOContext_submit(
+    PyTypeObject *type, PyTupleObject *args
+) {
+    if (!PyTuple_Check(args)) {
+        PyErr_SetNone(PyExc_ValueError);
+        return NULL;
+    }
+
+    int result = 0;
+// TODO: HERE
+//    uint32_t nr = PyTuple_Size(args);
+//
+//    PyObject* obj;
+//    AIOOpeartion* op;
+//
+//    struct iocb** iocppp = &calloc(nr, struct iocb*);
+//
+//    for (uint32_t i=0; i < nr; i++) {
+//        obj = PyTuple_GetItem(args, i);
+//        if (PyObject_TypeCheck(obj, &AIOOperationType) == 0) {
+//            PyErr_Format(
+//                PyExc_TypeError,
+//                "Wrong type for argument %d", i
+//            );
+//            return NULL;
+//        }
+//
+//        op = (AIOOperation*) obj;
+//        iocppp[i] = &obj->iocb;
+//    }
+
+    return (PyObject*) PyLong_FromSsize_t(result);
+}
+
+static PyMethodDef AIOContext_methods[] = {
+    {
+        "submit",
+        (PyCFunction) AIOContext_submit, METH_VARARGS,
+        AIOContext_submit_docstring
+    },
+    {NULL}  /* Sentinel */
+};
+
+static PyTypeObject
+AIOContextType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "context.AIOContext",
+    .tp_doc = "linux aio context representation",
+    .tp_basicsize = sizeof(AIOContext),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = AIOContext_new,
+    .tp_init = (initproc) AIOContext_init,
+    .tp_dealloc = (destructor) AIOContext_dealloc,
+    .tp_members = AIOContext_members,
+    .tp_methods = AIOContext_methods,
+    .tp_repr = (reprfunc) AIOContext_repr
+};
 
 
 static void
@@ -338,7 +575,7 @@ static PyObject* AIOOperation_submit(
 
     if (!argIsOk) return NULL;
 
-    if (self->context == NULL || PyObject_IsInstance(self->context, ContextClass) == 0) {
+    if (self->context == NULL || PyObject_TypeCheck(self->context, &AIOContextType) == 0) {
         PyErr_SetString(
             PyExc_ValueError,
             "context argument must be instance of AIOContext class"
@@ -346,7 +583,7 @@ static PyObject* AIOOperation_submit(
         return NULL;
     }
 
-    if (self->eventfd == NULL || PyObject_IsInstance(self->eventfd, EventFDClass) == 0) {
+    if (self->eventfd == NULL || PyObject_TypeCheck(self->eventfd, &EventFDType) == 0) {
         PyErr_SetString(
             PyExc_ValueError,
             "eventfd argument must be instance of EventFD class"
@@ -478,49 +715,48 @@ AIOOperationType = {
 };
 
 
-/*
-    MODULE DEFINITION
-*/
-static PyModuleDef
-operation_module = {
+
+static PyModuleDef linux_aio_module = {
     PyModuleDef_HEAD_INIT,
-    .m_name = "operation",
-    .m_doc = "aio operation c extension.",
+    .m_name = "linux_aio",
+    .m_doc = "Linux AIO c API bindings.",
     .m_size = -1,
 };
 
 
-/*
-    MODULE ENTRYPOINT
-*/
-PyMODINIT_FUNC
-PyInit_operation(void) {
-
-    PyObject* impMod;
-    PyObject* impModDict;
-
-    impMod = PyImport_ImportModule("linux_aio.eventfd");
-    impModDict = PyModule_GetDict(impMod);
-
-    EventFDClass = PyDict_GetItemString(impModDict, "EventFD");
-
-    impMod = PyImport_ImportModule("linux_aio.context");
-    impModDict = PyModule_GetDict(impMod);
-
-    ContextClass = PyDict_GetItemString(impModDict, "AIOContext");
-
+PyMODINIT_FUNC PyInit_linux_aio(void) {
     PyObject *m;
 
-    if (PyType_Ready(&AIOOperationType) < 0) return NULL;
-
-    m = PyModule_Create(&operation_module);
+    m = PyModule_Create(&linux_aio_module);
 
     if (m == NULL) return NULL;
+
+    if (PyType_Ready(&EventFDType) < 0) return NULL;
+
+    Py_INCREF(&EventFDType);
+
+    if (PyModule_AddObject(m, "EventFD", (PyObject *) &EventFDType) < 0) {
+        Py_DECREF(&EventFDType);
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    if (PyType_Ready(&AIOContextType) < 0) return NULL;
+
+    Py_INCREF(&AIOContextType);
+
+    if (PyModule_AddObject(m, "AIOContext", (PyObject *) &AIOContextType) < 0) {
+        Py_DECREF(&AIOContextType);
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    if (PyType_Ready(&AIOOperationType) < 0) return NULL;
 
     Py_INCREF(&AIOOperationType);
 
     if (PyModule_AddObject(m, "AIOOperation", (PyObject *) &AIOOperationType) < 0) {
-        Py_DECREF(&AIOOperationType);
+        Py_DECREF(&EventFDType);
         Py_DECREF(m);
         return NULL;
     }
