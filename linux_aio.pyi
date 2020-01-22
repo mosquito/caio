@@ -3,7 +3,7 @@ from typing import Optional, Union
 
 # noinspection PyPropertyDefinition
 class AIOContext:
-    def __init__(self, max_requests: int): ...
+    def __init__(self, max_requests: int = 32): ...
 
     def submit(self, *aio_operations) -> int: ...
 
@@ -54,6 +54,11 @@ class AIOOperation:
     def submit(self, context: AIOContext, eventfd: EventFD) -> int:
         """
         Submit operation to kernel space.
+        """
+
+    def prepare(self, eventfd: EventFD) -> int:
+        """
+        Prepare operation for batch submit thought AIOContext.
         """
 
     @property

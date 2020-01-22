@@ -147,7 +147,7 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
     self->max_requests = 0;
     self->ctx = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|I", kwlist, &self->max_requests)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|H", kwlist, &self->max_requests)) {
         return -1;
     }
 
@@ -227,6 +227,8 @@ static PyObject* AIOContext_submit(
         PyErr_SetFromErrno(PyExc_SystemError);
         return NULL;
     }
+
+    PyMem_Free(iocbpp);
 
     return (PyObject*) PyLong_FromSsize_t(result);
 }
@@ -630,6 +632,42 @@ static PyObject* AIOOperation_submit(
     return (PyObject*) PyLong_FromSsize_t(result);
 }
 
+/*
+    AIOOperation.prepare method definition
+*/
+PyDoc_STRVAR(AIOOperation_prepare_docstring,
+    "Prepare operation for batch submit thought AIOContext.\n\n"
+    "    AIOOpeartion.prepare(eventfd)"
+);
+
+static PyObject* AIOOperation_prepare(
+    AIOOperation *self, PyObject *args, PyObject *kwds
+) {
+    static char *kwlist[] = {"eventfd", NULL};
+
+    int argIsOk = PyArg_ParseTupleAndKeywords(
+        args, kwds, "O", kwlist,
+        &(self->eventfd)
+    );
+
+    if (!argIsOk) return NULL;
+
+    if (self->eventfd == NULL || PyObject_TypeCheck(self->eventfd, EventFDTypeP) == 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "eventfd argument must be instance of EventFD class"
+        );
+        return NULL;
+    }
+
+    Py_INCREF(self->eventfd);
+
+    self->iocb.aio_flags |= IOCB_FLAG_RESFD;
+    self->iocb.aio_resfd = self->eventfd->fileno;
+
+    return (PyObject*) Py_None;
+}
+
 
 /*
     AIOOperation properties
@@ -705,6 +743,11 @@ static PyMethodDef AIOOperation_methods[] = {
         "submit",
         (PyCFunction) AIOOperation_submit, METH_VARARGS | METH_KEYWORDS,
         AIOOperation_submit_docstring
+    },
+    {
+        "prepare",
+        (PyCFunction) AIOOperation_prepare, METH_VARARGS | METH_KEYWORDS,
+        AIOOperation_prepare_docstring
     },
     {NULL}  /* Sentinel */
 };
