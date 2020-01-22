@@ -29,14 +29,14 @@ Example
 
     async def main():
         ctx = AIOContext()
-        efd  = EventFD()
+        efd = EventFD()
 
         with open("test.file"), "wb+") as fp:
             fd = fp.fileno()
 
             # Execute one write operation
             await wait_aio_operation(
-                AIOOperation.write(b"Hello world", fd, offset=0)
+                AIOOperation.write(b"Hello world", fd, offset=0), ctx, efd
             )
 
             # Execute one read operation

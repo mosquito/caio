@@ -263,11 +263,62 @@ static PyObject* AIOContext_submit(
     return (PyObject*) PyLong_FromSsize_t(result);
 }
 
+PyDoc_STRVAR(AIOContext_get_events_docstring,
+    "Gather events for AIOContext. \n\n"
+    "    AIOOpeartion.get_events(min_events, max_events) -> Tuple[Tuple[]]"
+);
+static PyObject* AIOContext_get_events(
+    AIOContext *self, PyObject *args
+) {
+    int result = 0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "H|H", kwlist, &self->max_requests)) {
+        return -1;
+    }
+
+    PyObject* obj;
+    AIOOperation* op;
+
+    struct iocb** iocbpp = PyMem_Calloc(nr, sizeof(struct iocb*));
+
+    for (uint32_t i=0; i < nr; i++) {
+        obj = PyTuple_GetItem(args, i);
+        if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
+            PyErr_Format(
+                PyExc_TypeError,
+                "Wrong type for argument %d", i
+            );
+            return NULL;
+        }
+
+        op = (AIOOperation*) obj;
+        op->context = self;
+        Py_INCREF(self);
+        iocbpp[i] = &op->iocb;
+    }
+
+    result = io_submit(self->ctx, nr, iocbpp);
+
+    if (result<0) {
+        PyErr_SetFromErrno(PyExc_SystemError);
+        return NULL;
+    }
+
+    PyMem_Free(iocbpp);
+
+    return (PyObject*) PyLong_FromSsize_t(result);
+}
+
 static PyMethodDef AIOContext_methods[] = {
     {
         "submit",
         (PyCFunction) AIOContext_submit, METH_VARARGS,
         AIOContext_submit_docstring
+    },
+    {
+        "get_evetns",
+        (PyCFunction) AIOContext_get_events, METH_VARARGS | METH_KEYWORDS,
+        AIOContext_get_events_docstring
     },
     {NULL}  /* Sentinel */
 };
@@ -376,6 +427,7 @@ static PyObject* AIOOperation_read(
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
+    self->iocb.aio_data = (uint64_t) self;
     self->context = NULL;
     self->eventfd = NULL;
     self->buffer = NULL;
@@ -441,6 +493,7 @@ static PyObject* AIOOperation_write(
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
+    self->iocb.aio_data = (uint64_t) self;
     self->context = NULL;
     self->eventfd = NULL;
     self->buffer = NULL;
@@ -514,6 +567,7 @@ static PyObject* AIOOperation_fsync(
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
+    self->iocb.aio_data = (uint64_t) self;
     self->context = NULL;
     self->eventfd = NULL;
     self->buffer = NULL;
@@ -558,6 +612,7 @@ static PyObject* AIOOperation_fdsync(
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
+    self->iocb.aio_data = (uint64_t) self;
     self->buffer = NULL;
     self->py_buffer = NULL;
 
@@ -738,7 +793,6 @@ static PyMemberDef AIOOperation_members[] = {
         offsetof(AIOOperation, iocb.aio_nbytes),
         READONLY, "nbytes"
     },
-
     {NULL}  /* Sentinel */
 };
 

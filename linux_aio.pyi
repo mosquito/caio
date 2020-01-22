@@ -83,3 +83,6 @@ class AIOOperation:
 
     @property
     def nbytes(self) -> int: ...
+
+    @property
+    def data(self) -> int: ...
