@@ -71,7 +71,9 @@ def test_aio_operation(tmp_path):
             res = await results.get()
             assert res[0] == efd1.fileno
 
-            assert op.get_value()[:op.data] == b"Hello from async world"
+            ctx.process_events()
+
+            assert op.get_value() == b"Hello from async world"
 
     loop.run_until_complete(asyncio.wait_for(run(), 1))
     loop.remove_reader(efd1.fileno)

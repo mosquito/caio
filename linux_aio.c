@@ -10,6 +10,10 @@
 #include <structmember.h>
 
 
+static const unsigned CTX_MAX_REQUESTS_DEFAULT = 32;
+static const unsigned EV_MAX_REQUESTS_DEFAULT = 512;
+
+
 inline int io_setup(unsigned nr, aio_context_t *ctxp) {
 	return syscall(__NR_io_setup, nr, ctxp);
 }
@@ -180,7 +184,7 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
     }
 
     if (self->max_requests <= 0) {
-        self->max_requests = 32;
+        self->max_requests = CTX_MAX_REQUESTS_DEFAULT;
     }
 
     if (io_setup(self->max_requests, &self->ctx) < 0) {
@@ -263,50 +267,65 @@ static PyObject* AIOContext_submit(
     return (PyObject*) PyLong_FromSsize_t(result);
 }
 
-PyDoc_STRVAR(AIOContext_get_events_docstring,
+PyDoc_STRVAR(AIOContext_process_events_docstring,
     "Gather events for AIOContext. \n\n"
-    "    AIOOpeartion.get_events(min_events, max_events) -> Tuple[Tuple[]]"
+    "    AIOOpeartion.process_events(max_events, min_events) -> Tuple[Tuple[]]"
 );
-static PyObject* AIOContext_get_events(
-    AIOContext *self, PyObject *args
+static PyObject* AIOContext_process_events(
+    AIOContext *self, PyObject *args, PyObject *kwds
 ) {
-    int result = 0;
+    unsigned min_requests = 0;
+    unsigned max_requests = 0;
+    struct timespec timeout = {0, 0};
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "H|H", kwlist, &self->max_requests)) {
-        return -1;
+    static char *kwlist[] = {"max_requests", "min_requests", "timeout", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "|HHi", kwlist,
+        &max_requests, &min_requests, &timeout.tv_sec
+    )) { return NULL; }
+
+    if (max_requests == 0) {
+        max_requests = EV_MAX_REQUESTS_DEFAULT;
     }
 
-    PyObject* obj;
+    if (min_requests > max_requests) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "min_requests \"%d\" must be lower then max_requests \"%d\"",
+            min_requests, max_requests
+        );
+    }
+
+    struct io_event* events = PyMem_Calloc(
+        max_requests,
+        sizeof(struct io_event*)
+    );
+
+    int result = io_getevents(
+        self->ctx,
+        min_requests,
+        max_requests,
+        events,
+        &timeout
+    );
+
+    if (result < 0) { PyErr_SetFromErrno(PyExc_SystemError); }
+
     AIOOperation* op;
+    struct io_event* ev;
 
-    struct iocb** iocbpp = PyMem_Calloc(nr, sizeof(struct iocb*));
+    int32_t i;
+    for (i = 0; i < result; i++) {
+        ev = (struct io_event*) &events[i];
+        op = (AIOOperation*) ev->data;
 
-    for (uint32_t i=0; i < nr; i++) {
-        obj = PyTuple_GetItem(args, i);
-        if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
-            PyErr_Format(
-                PyExc_TypeError,
-                "Wrong type for argument %d", i
-            );
-            return NULL;
-        }
-
-        op = (AIOOperation*) obj;
-        op->context = self;
-        Py_INCREF(self);
-        iocbpp[i] = &op->iocb;
+        op->iocb.aio_nbytes = ev->res;
     }
 
-    result = io_submit(self->ctx, nr, iocbpp);
+    PyMem_Free(events);
 
-    if (result<0) {
-        PyErr_SetFromErrno(PyExc_SystemError);
-        return NULL;
-    }
-
-    PyMem_Free(iocbpp);
-
-    return (PyObject*) PyLong_FromSsize_t(result);
+    return (PyObject*) PyLong_FromSsize_t(i);
 }
 
 static PyMethodDef AIOContext_methods[] = {
@@ -316,9 +335,9 @@ static PyMethodDef AIOContext_methods[] = {
         AIOContext_submit_docstring
     },
     {
-        "get_evetns",
-        (PyCFunction) AIOContext_get_events, METH_VARARGS | METH_KEYWORDS,
-        AIOContext_get_events_docstring
+        "process_events",
+        (PyCFunction) AIOContext_process_events, METH_VARARGS | METH_KEYWORDS,
+        AIOContext_process_events_docstring
     },
     {NULL}  /* Sentinel */
 };
