@@ -88,18 +88,45 @@ static int EventFD_init(PyObject* self, PyObject *args, PyObject *kwds) {
     return PyArg_ParseTupleAndKeywords(args, kwds, "", kwlist);
 }
 
-static PyMemberDef EventFD_members[] = {
-    {"fileno", T_INT, offsetof(EventFD, fileno), READONLY,
-     "file descritptor"},
-    {NULL}  /* Sentinel */
-};
-
 static PyObject* EventFD_repr(EventFD *self) {
     return PyUnicode_FromFormat(
         "<%s as %p: fp=%i>",
         Py_TYPE(self)->tp_name, self, self->fileno
     );
 }
+
+PyDoc_STRVAR(EventFD_read_docstring,
+    "Read value from eventfd.\n\n"
+    "    EventFD().read() -> int"
+);
+static PyObject* EventFD_read(
+    EventFD *self, PyObject *args
+) {
+    uint64_t result = 0;
+    int size = read(self->fileno, &result, sizeof(uint64_t));
+
+    if (size != sizeof(uint64_t)) {
+        PyErr_SetNone(PyExc_BlockingIOError);
+        return NULL;
+    }
+
+    return (PyObject*) PyLong_FromUnsignedLongLong(result);
+}
+
+static PyMemberDef EventFD_members[] = {
+    {"fileno", T_INT, offsetof(EventFD, fileno), READONLY,
+     "file descritptor"},
+    {NULL}  /* Sentinel */
+};
+
+static PyMethodDef EventFD_methods[] = {
+    {
+        "read",
+        (PyCFunction) EventFD_read, METH_NOARGS,
+        EventFD_read_docstring
+    },
+    {NULL}  /* Sentinel */
+};
 
 static PyTypeObject
 EventFDType = {
@@ -113,6 +140,7 @@ EventFDType = {
     .tp_init = (initproc) EventFD_init,
     .tp_dealloc = (destructor) EventFD_dealloc,
     .tp_members = EventFD_members,
+    .tp_methods = EventFD_methods,
     .tp_repr = (reprfunc) EventFD_repr
 };
 
@@ -218,6 +246,8 @@ static PyObject* AIOContext_submit(
         }
 
         op = (AIOOperation*) obj;
+        op->context = self;
+        Py_INCREF(self);
         iocbpp[i] = &op->iocb;
     }
 
@@ -703,6 +733,12 @@ static PyMemberDef AIOOperation_members[] = {
         offsetof(AIOOperation, py_buffer),
         READONLY, "payload"
     },
+    {
+        "nbytes", T_ULONGLONG,
+        offsetof(AIOOperation, iocb.aio_nbytes),
+        READONLY, "nbytes"
+    },
+
     {NULL}  /* Sentinel */
 };
 

@@ -13,11 +13,11 @@ def test_aio_operation(tmp_path):
     loop = asyncio.get_event_loop()
     results = asyncio.Queue()
 
-    def on_read(fileno):
-        results.put_nowait((fileno, os.read(fileno, 8)))
+    def on_read(efd):
+        results.put_nowait((efd.fileno, efd.read()))
 
-    loop.add_reader(efd1.fileno, on_read, efd1.fileno)
-    loop.add_reader(efd2.fileno, on_read, efd2.fileno)
+    loop.add_reader(efd1.fileno, on_read, efd1)
+    loop.add_reader(efd2.fileno, on_read, efd2)
 
     async def run():
         with open(os.path.join(tmp_path, "temp.bin"), "wb+") as fp:
@@ -25,6 +25,9 @@ def test_aio_operation(tmp_path):
 
             op = AIOOperation.write(b"Hello world", fd, 0)
             assert op.submit(ctx, efd1) == 1
+
+            assert op.context == ctx
+            assert op.eventfd == efd1
 
             assert (await results.get())[0] == efd1.fileno
 
@@ -56,6 +59,19 @@ def test_aio_operation(tmp_path):
             assert (await results.get())[0] == efd1.fileno
 
             assert fp.read() == b"Hello from async world"
+
+            assert op1.eventfd == efd1
+            assert op2.eventfd == efd2
+
+            assert op1.context == op2.context == ctx
+
+            op = AIOOperation.read(255, fd, 0)
+            op.submit(ctx, efd1)
+
+            res = await results.get()
+            assert res[0] == efd1.fileno
+
+            assert op.get_value() == b"Hello from async world"
 
     loop.run_until_complete(asyncio.wait_for(run(), 1))
     loop.remove_reader(efd1.fileno)

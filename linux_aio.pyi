@@ -15,6 +15,8 @@ class EventFD:
     @property
     def fileno(self) -> int: ...
 
+    def read(self) -> int: ...
+
 
 # noinspection PyPropertyDefinition
 class AIOOperation:
@@ -78,3 +80,6 @@ class AIOOperation:
 
     @property
     def payload(self) -> Optional[Union[bytes, memoryview]]: ...
+
+    @property
+    def nbytes(self) -> int: ...
