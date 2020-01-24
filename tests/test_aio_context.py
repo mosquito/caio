@@ -1,16 +1,16 @@
 import pytest
-from linux_aio import AIOContext
+from linux_aio._aio import Context
 
 
 def test_aio_context():
-    ctx = AIOContext()
+    ctx = Context()
     assert ctx is not None
 
-    ctx = AIOContext(1)
+    ctx = Context(1)
     assert ctx is not None
 
-    ctx = AIOContext(32218)
+    ctx = Context(32218)
     assert ctx is not None
 
     with pytest.raises(SystemError):
-        AIOContext(65534)
+        Context(65534)
