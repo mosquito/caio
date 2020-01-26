@@ -1,19 +1,26 @@
 import asyncio
-import logging
 
-from . import _aio
+from . import aio
 
 
-class AIOContext:
-    def __init__(self, max_requests=512, loop=None):
-        self.context = _aio.Context(max_requests=max_requests)
+class AsyncioAIOContext:
+    MAX_REQUESTS_DEFAULT = 128
+
+    def __init__(self, max_requests=MAX_REQUESTS_DEFAULT, loop=None):
+        self.context = aio.Context(max_requests=max_requests)
         self.loop = loop or asyncio.get_event_loop()
+
         self.loop.add_reader(self.context.fileno, self._on_read_event)
 
         self.operations = asyncio.Queue(maxsize=max_requests)
         self.runner_task = self.loop.create_task(self._run())
 
+    def _on_read_event(self):
+        self.context.poll()
+        self.context.process_events()
+
     async def close(self):
+        self.loop.remove_reader(self.context.fileno)
         self.runner_task.cancel()
 
         try:
@@ -21,32 +28,36 @@ class AIOContext:
         except asyncio.CancelledError:
             return
 
-    def _on_read_event(self):
-        while self.context.process_events():
-            try:
-                self.context.read()
-            except BlockingIOError:
-                return
+    async def submit(self, op: aio.Operation):
+        if not isinstance(op, aio.Operation):
+            raise ValueError("Operation object expected")
 
-    async def submit(self, op: _aio.Operation):
-        if not isinstance(op, _aio.Operation):
-            raise ValueError("Invalid operation object")
+        future = self.loop.create_future()
+        op.set_callback(future.set_result)
 
-        return await self.operations.put(op)
+        await self.operations.put((op, future))
+
+        return await future
 
     async def _run(self):
         while True:
-            operations = []
+            op, future = await self.operations.get()
 
-            op = await self.operations.get()
-            operations.append(op)
+            try:
+                self.context.submit(op)
+            except Exception as e:
+                future.set_exception(e)
 
-            while True:
-                try:
-                    operations.append(self.operations.get_nowait())
-                except asyncio.QueueEmpty:
-                    break
+    async def read(self, nbytes: int, fd: int, offset: int) -> bytes:
+        op = aio.Operation.read(nbytes, fd, offset)
+        await self.submit(op)
+        return op.get_value()
 
-            result = self.context.submit(*operations)
-            if len(operations) > result:
-                logging.warning("Operation list truncated")
+    async def write(self, payload: bytes, fd: int, offset: int) -> int:
+        return await self.submit(aio.Operation.write(payload, fd, offset))
+
+    async def fsync(self, fd: int):
+        await self.submit(aio.Operation.fsync(fd))
+
+    async def fdsync(self, fd: int):
+        await self.submit(aio.Operation.fdsync(fd))

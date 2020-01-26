@@ -6,10 +6,10 @@ setup(
     version='0.2.0',
     packages=['linux_aio'],
     package_data={
-        'linux_aio': ['linux_aio/_aio.pyi'],
+        'linux_aio': ['linux_aio/aio.pyi'],
     },
     ext_modules=[
-        Extension('linux_aio._aio', ['linux_aio/_aio.c'],
+        Extension('linux_aio.aio', ['linux_aio/aio.c'],
                   extra_compile_args=["-g"]),
     ]
 )

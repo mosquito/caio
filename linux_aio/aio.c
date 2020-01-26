@@ -799,13 +799,13 @@ AIOOperationType = {
 
 static PyModuleDef aio_module = {
     PyModuleDef_HEAD_INIT,
-    .m_name = "_aio",
+    .m_name = "aio",
     .m_doc = "Linux AIO c API bindings.",
     .m_size = -1,
 };
 
 
-PyMODINIT_FUNC PyInit__aio(void) {
+PyMODINIT_FUNC PyInit_aio(void) {
     AIOContextTypeP = &AIOContextType;
     AIOOperationTypeP = &AIOOperationType;
 
