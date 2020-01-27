@@ -9,15 +9,18 @@ class AsyncioAIOContext:
     def __init__(self, max_requests=MAX_REQUESTS_DEFAULT, loop=None):
         self.context = aio.Context(max_requests=max_requests)
         self.loop = loop or asyncio.get_event_loop()
+        self.semaphore = asyncio.Semaphore(max_requests)
 
         self.loop.add_reader(self.context.fileno, self._on_read_event)
 
-        self.operations = asyncio.Queue(maxsize=max_requests)
+        self.operations = asyncio.Queue()
         self.runner_task = self.loop.create_task(self._run())
 
     def _on_read_event(self):
         self.context.poll()
-        self.context.process_events()
+
+        for _ in range(self.context.process_events()):
+            self.semaphore.release()
 
     async def close(self):
         self.loop.remove_reader(self.context.fileno)
@@ -44,6 +47,8 @@ class AsyncioAIOContext:
             op, future = await self.operations.get()
 
             try:
+                await self.semaphore.acquire()
+                self.operations.task_done()
                 self.context.submit(op)
             except Exception as e:
                 future.set_exception(e)
