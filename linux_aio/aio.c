@@ -173,6 +173,7 @@ static PyObject* AIOContext_submit(
 
         op->context = self;
         Py_INCREF(self);
+
         Py_INCREF(op);
 
         op->iocb.aio_flags |= IOCB_FLAG_RESFD;
@@ -262,7 +263,6 @@ static PyObject* AIOContext_process_events(
             return NULL;
         }
 
-        Py_XDECREF(op->callback);
         Py_XDECREF(op);
     }
 
@@ -363,15 +363,18 @@ AIOOperation_dealloc(AIOOperation *self) {
         self->context = NULL;
     }
 
+    if (self->callback != NULL) {
+        Py_XDECREF(self->callback);
+        self->callback = NULL;
+    }
+
     if (self->iocb.aio_lio_opcode == IOCB_CMD_PREAD && self->buffer != NULL) {
         PyMem_Free(self->buffer);
         self->buffer = NULL;
     }
 
-    if (self->py_buffer != NULL) {
-        Py_XDECREF(self->py_buffer);
-        self->py_buffer = NULL;
-    }
+    Py_XDECREF(self->py_buffer);
+    self->py_buffer = NULL;
 
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
