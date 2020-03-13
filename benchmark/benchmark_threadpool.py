@@ -1,7 +1,6 @@
 import asyncio
 
 import os
-import sys
 import time
 from concurrent.futures.thread import ThreadPoolExecutor
 
@@ -18,10 +17,7 @@ async def read_file(pool: ThreadPoolExecutor, semaphore, file_id):
     fname = f"data/{file_id}.bin"
     file_size = os.stat(fname).st_size
 
-    futures = []
-
     async def read(offset):
-
         def sync_read(fd):
             fd = os.dup(fd)
             os.lseek(fd, offset, 0)
@@ -34,13 +30,13 @@ async def read_file(pool: ThreadPoolExecutor, semaphore, file_id):
     with open(fname, "rb") as fp:
         fd = fp.fileno()
 
+        c = 0
         while offset < file_size:
-            futures.append(read(offset))
+            await read(offset)
             offset += chunk_size
+            c += 1
 
-        await asyncio.gather(*futures)
-
-    return len(futures)
+    return c
 
 
 async def timer(future):
@@ -50,6 +46,7 @@ async def timer(future):
 
 
 async def main():
+    print("files   nr      min   madian      max   op/s    total  #ops chunk")
     for generation in range(1, 129):
         pool = ThreadPoolExecutor(max_workers=pool_max_workers)
         semaphore = asyncio.Semaphore(512)
@@ -60,7 +57,7 @@ async def main():
             futures.append(read_file(pool, semaphore, file_id))
 
         stat = []
-        total = - time.monotonic()
+        total = -time.monotonic()
         nops = 0
 
         for ops, delta in await asyncio.gather(*map(timer, futures)):
@@ -75,20 +72,25 @@ async def main():
 
         dmin = stat[0]
         dmedian = stat[int(len(stat) / 2)]
-        dmax = (stat[-1])
+        dmax = stat[-1]
 
-        sys.stdout.write(
-            "\t".join(
-                map(lambda x: str(x).replace(".", ","), (
-                    generation, pool_max_workers,
-                    dmin, dmedian, dmax,
-                    ops_sec, total, nops, chunk_size
-                )))
+        print(
+            "%5d %4d %2.6f %2.6f %2.6f %6d %-3.6f %5d %d"
+            % (
+                generation,
+                pool_max_workers,
+                dmin,
+                dmedian,
+                dmax,
+                ops_sec,
+                total,
+                nops,
+                chunk_size,
+            )
         )
-        sys.stdout.write("\n")
-        sys.stdout.flush()
 
         pool.shutdown(True)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     loop.run_until_complete(main())

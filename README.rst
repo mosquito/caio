@@ -1,5 +1,5 @@
-Linux AIO for python
-====================
+Linux AIO wrapper for python
+============================
 
 Python bindings for Linux AIO API and simple asyncio wrapper.
 

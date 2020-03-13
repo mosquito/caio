@@ -24,18 +24,18 @@ def test_adapter(tmp_path):
         with open(os.path.join(tmp_path, "temp.bin"), "wb+") as fp:
             fd = fp.fileno()
 
-            assert await context.read(32, fd, 0) == b''
-            assert await context.write(b'Hello world', fd, 0)
-            assert await context.read(32, fd, 0) == b'Hello world'
+            assert await context.read(32, fd, 0) == b""
+            assert await context.write(b"Hello world", fd, 0)
+            assert await context.read(32, fd, 0) == b"Hello world"
 
-            assert await context.write(b'Hello world', fd, 0)
-            assert await context.read(32, fd, 0) == b'Hello world'
+            assert await context.write(b"Hello world", fd, 0)
+            assert await context.read(32, fd, 0) == b"Hello world"
 
-            part = b'\x00\x01\x02\x03'
+            part = b"\x00\x01\x02\x03"
 
-            await asyncio.gather(*[
-                context.write(part, fd, len(part) * i) for i in range(1024)
-            ])
+            await asyncio.gather(
+                *[context.write(part, fd, len(part) * i) for i in range(1024)]
+            )
 
             await context.fdsync(fd)
 
@@ -53,7 +53,6 @@ def test_bad_file_descritor(tmp_path):
             fd = fp.fileno()
 
         with pytest.raises(SystemError):
-            assert await context.read(32, fd, 0) == b''
+            assert await context.read(32, fd, 0) == b""
 
     loop.run_until_complete(asyncio.wait_for(run(), 5))
-

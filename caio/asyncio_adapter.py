@@ -1,13 +1,13 @@
 import asyncio
 
-from . import aio
+from . import linux_aio
 
 
 class AsyncioAIOContext:
     MAX_REQUESTS_DEFAULT = 128
 
     def __init__(self, max_requests=MAX_REQUESTS_DEFAULT, loop=None):
-        self.context = aio.Context(max_requests=max_requests)
+        self.context = linux_aio.Context(max_requests=max_requests)
         self.loop = loop or asyncio.get_event_loop()
         self.semaphore = asyncio.Semaphore(max_requests)
 
@@ -31,8 +31,8 @@ class AsyncioAIOContext:
         except asyncio.CancelledError:
             return
 
-    async def submit(self, op: aio.Operation):
-        if not isinstance(op, aio.Operation):
+    async def submit(self, op: linux_aio.Operation):
+        if not isinstance(op, linux_aio.Operation):
             raise ValueError("Operation object expected")
 
         future = self.loop.create_future()
@@ -54,15 +54,17 @@ class AsyncioAIOContext:
                 future.set_exception(e)
 
     async def read(self, nbytes: int, fd: int, offset: int) -> bytes:
-        op = aio.Operation.read(nbytes, fd, offset)
+        op = linux_aio.Operation.read(nbytes, fd, offset)
         await self.submit(op)
         return op.get_value()
 
     async def write(self, payload: bytes, fd: int, offset: int) -> int:
-        return await self.submit(aio.Operation.write(payload, fd, offset))
+        return await self.submit(
+            linux_aio.Operation.write(payload, fd, offset)
+        )
 
     async def fsync(self, fd: int):
-        await self.submit(aio.Operation.fsync(fd))
+        await self.submit(linux_aio.Operation.fsync(fd))
 
     async def fdsync(self, fd: int):
-        await self.submit(aio.Operation.fdsync(fd))
+        await self.submit(linux_aio.Operation.fdsync(fd))

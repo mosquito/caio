@@ -800,21 +800,21 @@ AIOOperationType = {
 };
 
 
-static PyModuleDef aio_module = {
+static PyModuleDef linux_aio_module = {
     PyModuleDef_HEAD_INIT,
-    .m_name = "aio",
+    .m_name = "linux_aio",
     .m_doc = "Linux AIO c API bindings.",
     .m_size = -1,
 };
 
 
-PyMODINIT_FUNC PyInit_aio(void) {
+PyMODINIT_FUNC PyInit_linux_aio(void) {
     AIOContextTypeP = &AIOContextType;
     AIOOperationTypeP = &AIOOperationType;
 
     PyObject *m;
 
-    m = PyModule_Create(&aio_module);
+    m = PyModule_Create(&linux_aio_module);
 
     if (m == NULL) return NULL;
 

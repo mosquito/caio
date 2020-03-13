@@ -23,13 +23,12 @@ def main():
     files = 128
 
     iterator = tqdm.tqdm(
-        POOL.imap_unordered(gen_data, range(files)),
-        total=files
+        POOL.imap_unordered(gen_data, range(files)), total=files
     )
 
     for _ in iterator:
         pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
