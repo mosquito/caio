@@ -2,14 +2,13 @@ from setuptools import Extension, setup
 
 
 setup(
-    name='linux_aio',
-    version='0.2.0',
-    packages=['linux_aio'],
+    name='caio',
+    version='0.3.0',
+    packages=['caio'],
     package_data={
-        'linux_aio': ['linux_aio/aio.pyi'],
+        'caio': ['caio/aio.pyi'],
     },
     ext_modules=[
-        Extension('linux_aio.aio', ['linux_aio/aio.c'],
-                  extra_compile_args=["-g"]),
+        Extension('caio.aio', ['caio/aio.c'], extra_compile_args=["-g"]),
     ]
 )

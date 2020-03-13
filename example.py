@@ -1,5 +1,5 @@
 import asyncio
-from linux_aio import AsyncioAIOContext
+from caio import AsyncioAIOContext
 
 
 loop = asyncio.get_event_loop()

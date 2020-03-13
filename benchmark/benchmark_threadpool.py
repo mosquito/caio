@@ -3,29 +3,39 @@ import asyncio
 import os
 import sys
 import time
-
-from caio import AsyncioAIOContext
+from concurrent.futures.thread import ThreadPoolExecutor
 
 
 loop = asyncio.get_event_loop()
 
 
-chunk_size = 32 * 1024
-context_max_requests = 512
+chunk_size = 256 * 1024
+pool_max_workers = 16
 
 
-async def read_file(ctx: AsyncioAIOContext, file_id):
+async def read_file(pool: ThreadPoolExecutor, semaphore, file_id):
     offset = 0
     fname = f"data/{file_id}.bin"
     file_size = os.stat(fname).st_size
 
     futures = []
 
+    async def read(offset):
+
+        def sync_read(fd):
+            fd = os.dup(fd)
+            os.lseek(fd, offset, 0)
+            os.read(fd, chunk_size)
+            os.close(fd)
+
+        async with semaphore:
+            return await loop.run_in_executor(pool, sync_read, fd)
+
     with open(fname, "rb") as fp:
         fd = fp.fileno()
 
         while offset < file_size:
-            futures.append(ctx.read(chunk_size, fd, offset))
+            futures.append(read(offset))
             offset += chunk_size
 
         await asyncio.gather(*futures)
@@ -41,12 +51,13 @@ async def timer(future):
 
 async def main():
     for generation in range(1, 129):
-        context = AsyncioAIOContext(context_max_requests)
+        pool = ThreadPoolExecutor(max_workers=pool_max_workers)
+        semaphore = asyncio.Semaphore(512)
 
         futures = []
 
         for file_id in range(generation):
-            futures.append(read_file(context, file_id))
+            futures.append(read_file(pool, semaphore, file_id))
 
         stat = []
         total = - time.monotonic()
@@ -69,7 +80,7 @@ async def main():
         sys.stdout.write(
             "\t".join(
                 map(lambda x: str(x).replace(".", ","), (
-                    generation, context_max_requests,
+                    generation, pool_max_workers,
                     dmin, dmedian, dmax,
                     ops_sec, total, nops, chunk_size
                 )))
@@ -77,8 +88,7 @@ async def main():
         sys.stdout.write("\n")
         sys.stdout.flush()
 
-        await context.close()
-
+        pool.shutdown(True)
 
 if __name__ == '__main__':
     loop.run_until_complete(main())

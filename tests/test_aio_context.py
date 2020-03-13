@@ -1,5 +1,5 @@
 import pytest
-from linux_aio._aio import Context
+from caio._aio import Context
 
 
 def test_aio_context():

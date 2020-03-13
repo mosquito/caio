@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from linux_aio import AsyncioAIOContext
+from caio import AsyncioAIOContext
 
 
 def test_context():

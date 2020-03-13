@@ -1,7 +1,7 @@
 import asyncio
 import os
 
-from linux_aio._aio import Context, Operation
+from caio._aio import Context, Operation
 
 
 async def perform_operations(ctx: Context, *ops: Operation):
