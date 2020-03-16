@@ -1,56 +1,47 @@
-#include <linux/aio_abi.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/eventfd.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <structmember.h>
 
-
-static const unsigned CTX_MAX_REQUESTS_DEFAULT = 32;
-static const unsigned EV_MAX_REQUESTS_DEFAULT = 512;
+#include "src/threadpool/threadpool.h"
 
 
-inline int io_setup(unsigned nr, aio_context_t *ctxp) {
-	return syscall(__NR_io_setup, nr, ctxp);
-}
-
-
-inline int io_destroy(aio_context_t ctx) {
-	return syscall(__NR_io_destroy, ctx);
-}
-
-
-inline int io_getevents(aio_context_t ctx, long min_nr, long max_nr,
-		struct io_event *events, struct timespec *timeout) {
-	return syscall(__NR_io_getevents, ctx, min_nr, max_nr, events, timeout);
-}
-
-
-inline int io_submit(aio_context_t ctx, long nr, struct iocb **iocbpp) {
-	return syscall(__NR_io_submit, ctx, nr, iocbpp);
-}
+static const unsigned CTX_POOL_SIZE_DEFAULT = 8;
+static const unsigned CTX_MAX_REQUESTS_DEFAULT = 512;
 
 
 typedef struct {
     PyObject_HEAD
-    aio_context_t ctx;
-    int fileno;
-    unsigned max_requests;
+    threadpool_t* pool;
+    uint16_t max_requests;
+    uint8_t pool_size;
 } AIOContext;
 
 
 typedef struct {
     PyObject_HEAD
-    AIOContext* context;
     PyObject* py_buffer;
     PyObject* callback;
-    char* buffer;
-    struct iocb iocb;
+    int opcode;
+    unsigned int fileno;
+    unsigned int offset;
+    int result;
+    int error;
+    Py_ssize_t buf_size;
+    char* buf;
 } AIOOperation;
+
+
+enum THAIO_OP_CODE {
+    THAIO_READ,
+    THAIO_WRITE,
+    THAIO_FSYNC,
+    THAIO_FDSYNC,
+    THAIO_NOOP,
+};
 
 
 static PyTypeObject* AIOOperationTypeP = NULL;
@@ -59,16 +50,11 @@ static PyTypeObject* AIOContextTypeP = NULL;
 
 static void
 AIOContext_dealloc(AIOContext *self) {
-    if (self->ctx != 0) {
-        aio_context_t ctx = self->ctx;
-        self->ctx = 0;
+    if (self->pool != 0) {
+        threadpool_t* pool = self->pool;
+        self->pool = 0;
 
-        io_destroy(ctx);
-    }
-
-    if (self->fileno >= 0) {
-        close(self->fileno);
-        self->fileno = -1;
+        threadpool_destroy(pool, 0);
     }
 
     Py_TYPE(self)->tp_free((PyObject *) self);
@@ -88,27 +74,50 @@ AIOContext_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
 static int
 AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
 {
-    static char *kwlist[] = {"max_requests", NULL};
+    static char *kwlist[] = {"max_requests", "pool_size", NULL};
 
-    self->ctx = 0;
+    self->pool = NULL;
     self->max_requests = 0;
-    self->fileno = eventfd(0, 0);
 
-    if (self->fileno < 0) {
-        PyErr_SetFromErrno(PyExc_SystemError);
-        return -1;
-    }
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|H", kwlist, &self->max_requests)) {
-        return -1;
-    }
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "|HH", kwlist,
+            &self->max_requests, &self->pool_size
+    )) return -1;
 
     if (self->max_requests <= 0) {
         self->max_requests = CTX_MAX_REQUESTS_DEFAULT;
     }
 
-    if (io_setup(self->max_requests, &self->ctx) < 0) {
-        PyErr_SetFromErrno(PyExc_SystemError);
+    if (self->pool_size <= 0) {
+        self->pool_size = CTX_POOL_SIZE_DEFAULT;
+    }
+
+    if (self->pool_size > MAX_THREADS) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "pool_size too large. Allowed lower then %d",
+            MAX_THREADS
+        );
+        return -1;
+    }
+
+    if (self->max_requests > MAX_QUEUE) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "max_requests too large. Allowed lower then %d",
+            MAX_QUEUE
+        );
+        return -1;
+    }
+
+    self->pool = threadpool_create(self->pool_size, self->max_requests, 0);
+
+    if (self->pool == NULL) {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "Pool initialization failed size=%d max_requests=%d",
+            self->pool_size, self->max_requests
+        );
         return -1;
     }
 
@@ -116,14 +125,105 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
 }
 
 static PyObject* AIOContext_repr(AIOContext *self) {
-    if (self->ctx == 0) {
-        PyErr_SetNone(PyExc_RuntimeError);
+    if (self->pool == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "Pool not initialized");
         return NULL;
     }
     return PyUnicode_FromFormat(
-        "<%s as %p: max_requests=%i, ctx=%lli>",
-        Py_TYPE(self)->tp_name, self, self->max_requests, self->ctx
+        "<%s as %p: max_requests=%i, pool_size=%i, ctx=%lli>",
+        Py_TYPE(self)->tp_name, self, self->max_requests,
+        self->pool_size, self->pool
     );
+}
+
+
+void worker(void *arg) {
+    PyGILState_STATE state;
+
+    state = PyGILState_Ensure();
+    AIOOperation* op = arg;
+
+    if (op->opcode == THAIO_NOOP) return;
+
+    Py_INCREF(op);
+
+    int fileno = op->fileno;
+    int offset = op->offset;
+    int buf_size = op->buf_size;
+    char* buf = op->buf;
+
+    PyGILState_Release(state);
+
+    int result;
+    int err;
+
+    switch (op->opcode) {
+        case THAIO_WRITE:
+            result = pwrite(fileno, (const char*) buf, buf_size, offset);
+            break;
+        case THAIO_FSYNC:
+            result = fsync(fileno);
+            break;
+        case THAIO_FDSYNC:
+            result = fdatasync(fileno);
+            break;
+        case THAIO_READ:
+            result = pread(fileno, buf, buf_size, offset);
+            break;
+    }
+
+    state = PyGILState_Ensure();
+    op->result = result;
+    op->error = errno;
+
+    if (op->opcode == THAIO_READ) {
+        op->buf_size = result;
+    }
+
+    if (op->callback != NULL) {
+        PyObject_CallFunction(op->callback, "O", op);
+    }
+    Py_XDECREF(op);
+    PyGILState_Release(state);
+}
+
+
+inline int process_pool_error(int code) {
+    switch (code) {
+        case threadpool_invalid:
+            PyErr_SetString(
+                PyExc_RuntimeError,
+                "Thread pool pointer is invalid"
+            );
+            return code;
+        case threadpool_lock_failure:
+            PyErr_SetString(
+                PyExc_RuntimeError,
+                "Failed to lock thread pool"
+            );
+            return code;
+        case threadpool_queue_full:
+            PyErr_SetString(
+                PyExc_RuntimeError,
+                "Thread pool queue full"
+            );
+            return code;
+        case threadpool_shutdown:
+            PyErr_SetString(
+                PyExc_RuntimeError,
+                "Thread pool is shutdown"
+            );
+            return code;
+        case threadpool_thread_failure:
+            PyErr_SetString(
+                PyExc_RuntimeError,
+                "Thread failure"
+            );
+            return code;
+    }
+
+    if (code < 0) PyErr_SetString(PyExc_RuntimeError, "Unknown error");
+    return code;
 }
 
 
@@ -135,12 +235,12 @@ PyDoc_STRVAR(AIOContext_submit_docstring,
 static PyObject* AIOContext_submit(
     AIOContext *self, PyObject *args
 ) {
-    if (self == 0) {
+    if (self == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "self is NULL");
         return NULL;
     }
 
-    if (self->ctx == 0) {
+    if (self->pool == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "self->ctx is NULL");
         return NULL;
     }
@@ -150,14 +250,10 @@ static PyObject* AIOContext_submit(
         return NULL;
     }
 
-    int result = 0;
-
     uint32_t nr = PyTuple_Size(args);
 
     PyObject* obj;
-    AIOOperation* op;
-
-    struct iocb** iocbpp = PyMem_Calloc(nr, sizeof(struct iocb*));
+    AIOOperation** ops = (AIOOperation**) PyMem_Calloc(nr, sizeof(AIOOperation*));
 
     for (uint32_t i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
@@ -166,137 +262,25 @@ static PyObject* AIOContext_submit(
                 PyExc_TypeError,
                 "Wrong type for argument %d", i
             );
-            PyMem_Free(iocbpp);
+
             return NULL;
         }
 
-        op = (AIOOperation*) obj;
+        ops[i] = (AIOOperation*) obj;
 
-        op->context = self;
         Py_INCREF(self);
-
-        Py_INCREF(op);
-
-        op->iocb.aio_flags |= IOCB_FLAG_RESFD;
-        op->iocb.aio_resfd = self->fileno;
-
-        iocbpp[i] = &op->iocb;
+        Py_INCREF(ops[i]);
     }
 
-    result = io_submit(self->ctx, nr, iocbpp);
+    uint32_t i=0;
+    int result = 0;
 
-    if (result < 0) {
-        PyErr_SetFromErrno(PyExc_SystemError);
-        return NULL;
-    }
-
-    PyMem_Free(iocbpp);
-
-    return (PyObject*) PyLong_FromSsize_t(result);
-}
-
-PyDoc_STRVAR(AIOContext_process_events_docstring,
-    "Gather events for Context. \n\n"
-    "    Operation.process_events(max_events, min_events) -> Tuple[Tuple[]]"
-);
-static PyObject* AIOContext_process_events(
-    AIOContext *self, PyObject *args, PyObject *kwds
-) {
-    if (self->ctx == 0) {
-        PyErr_SetNone(PyExc_RuntimeError);
-        return NULL;
-    }
-
-    unsigned min_requests = 0;
-    unsigned max_requests = 0;
-    struct timespec timeout = {0, 0};
-
-    static char *kwlist[] = {"max_requests", "min_requests", "timeout", NULL};
-
-    if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "|HHi", kwlist,
-        &max_requests, &min_requests, &timeout.tv_sec
-    )) { return NULL; }
-
-    if (max_requests == 0) {
-        max_requests = EV_MAX_REQUESTS_DEFAULT;
-    }
-
-    if (min_requests > max_requests) {
-        PyErr_Format(
-            PyExc_ValueError,
-            "min_requests \"%d\" must be lower then max_requests \"%d\"",
-            min_requests, max_requests
-        );
-        return NULL;
-    }
-
-    struct io_event events[max_requests];
-
-    int result = io_getevents(
-        self->ctx,
-        min_requests,
-        max_requests,
-        events,
-        &timeout
-    );
-
-    if (result < 0) {
-        PyErr_SetFromErrno(PyExc_SystemError);
-        return NULL;
-    }
-
-    AIOOperation* op;
-    struct io_event* ev;
-
-    int32_t i;
-    for (i = 0; i < result; i++) {
-        ev = &events[i];
-
-        op = (AIOOperation*) ev->data;
-        op->iocb.aio_nbytes = ev->res;
-
-        if (op->callback == NULL) {
-            continue;
-        }
-
-        if (PyObject_CallFunction(op->callback, "K", ev->res) == NULL) {
-            return NULL;
-        }
-
-        Py_XDECREF(op);
+    for (; i < nr; i++) {
+        result = threadpool_add(self->pool, worker, (void*) ops[i], 0);
+        if (process_pool_error(result) < 0) return NULL;
     }
 
     return (PyObject*) PyLong_FromSsize_t(i);
-}
-
-
-PyDoc_STRVAR(AIOContext_poll_docstring,
-    "Read value from context file descriptor.\n\n"
-    "    Context().poll() -> int"
-);
-static PyObject* AIOContext_poll(
-    AIOContext *self, PyObject *args
-) {
-    if (self->ctx == 0) {
-        PyErr_SetNone(PyExc_RuntimeError);
-        return NULL;
-    }
-
-    if (self->fileno < 0) {
-        PyErr_SetNone(PyExc_RuntimeError);
-        return NULL;
-    }
-
-    uint64_t result = 0;
-    int size = read(self->fileno, &result, sizeof(uint64_t));
-
-    if (size != sizeof(uint64_t)) {
-        PyErr_SetNone(PyExc_BlockingIOError);
-        return NULL;
-    }
-
-    return (PyObject*) PyLong_FromUnsignedLongLong(result);
 }
 
 
@@ -305,11 +289,11 @@ static PyObject* AIOContext_poll(
 */
 static PyMemberDef AIOContext_members[] = {
     {
-        "fileno",
+        "pool_size",
         T_INT,
-        offsetof(AIOContext, fileno),
+        offsetof(AIOContext, pool_size),
         READONLY,
-        "fileno"
+        "pool_size"
     },
     {
         "max_requests",
@@ -327,16 +311,6 @@ static PyMethodDef AIOContext_methods[] = {
         (PyCFunction) AIOContext_submit, METH_VARARGS,
         AIOContext_submit_docstring
     },
-    {
-        "process_events",
-        (PyCFunction) AIOContext_process_events, METH_VARARGS | METH_KEYWORDS,
-        AIOContext_process_events_docstring
-    },
-    {
-        "poll",
-        (PyCFunction) AIOContext_poll, METH_NOARGS,
-        AIOContext_poll_docstring
-    },
     {NULL}  /* Sentinel */
 };
 
@@ -344,7 +318,7 @@ static PyTypeObject
 AIOContextType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "Context",
-    .tp_doc = "linux aio context representation",
+    .tp_doc = "thread aio context",
     .tp_basicsize = sizeof(AIOContext),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
@@ -359,19 +333,9 @@ AIOContextType = {
 
 static void
 AIOOperation_dealloc(AIOOperation *self) {
-    if (self->context != NULL) {
-        Py_XDECREF(self->context);
-        self->context = NULL;
-    }
-
     if (self->callback != NULL) {
         Py_XDECREF(self->callback);
         self->callback = NULL;
-    }
-
-    if (self->iocb.aio_lio_opcode == IOCB_CMD_PREAD && self->buffer != NULL) {
-        PyMem_Free(self->buffer);
-        self->buffer = NULL;
     }
 
     Py_XDECREF(self->py_buffer);
@@ -384,20 +348,20 @@ AIOOperation_dealloc(AIOOperation *self) {
 static PyObject* AIOOperation_repr(AIOOperation *self) {
     char* mode;
 
-    switch (self->iocb.aio_lio_opcode) {
-        case IOCB_CMD_PREAD:
+    switch (self->opcode) {
+        case THAIO_READ:
             mode = "read";
             break;
 
-        case IOCB_CMD_PWRITE:
+        case THAIO_WRITE:
             mode = "write";
             break;
 
-        case IOCB_CMD_FSYNC:
+        case THAIO_FSYNC:
             mode = "fsync";
             break;
 
-        case IOCB_CMD_FDSYNC:
+        case THAIO_FDSYNC:
             mode = "fdsync";
             break;
         default:
@@ -406,9 +370,9 @@ static PyObject* AIOOperation_repr(AIOOperation *self) {
     }
 
     return PyUnicode_FromFormat(
-        "<%s at %p: mode=\"%s\", fd=%i, offset=%i, buffer=%p>",
+        "<%s at %p: mode=\"%s\", fd=%i, offset=%i, result=%i, buffer=%p>",
         Py_TYPE(self)->tp_name, self, mode,
-        self->iocb.aio_fildes, self->iocb.aio_offset, self->iocb.aio_buf
+        self->fileno, self->offset, self->result, self->buf
     );
 }
 
@@ -439,21 +403,18 @@ static PyObject* AIOOperation_read(
         return NULL;
     }
 
-    memset(&self->iocb, 0, sizeof(struct iocb));
-
-    self->iocb.aio_data = self;
-    self->context = NULL;
-    self->buffer = NULL;
+    self->buf = NULL;
     self->py_buffer = NULL;
 
     uint64_t nbytes = 0;
+    uint16_t priority;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "KI|LH", kwlist,
         &nbytes,
-        &(self->iocb.aio_fildes),
-        &(self->iocb.aio_offset),
-        &(self->iocb.aio_reqprio)
+        &(self->fileno),
+        &(self->offset),
+        &priority
     );
 
     if (!argIsOk) return NULL;
@@ -467,14 +428,13 @@ static PyObject* AIOOperation_read(
         return NULL;
     }
 
-    self->buffer = PyMem_Calloc(nbytes, sizeof(char));
-    self->iocb.aio_buf = (uint64_t) self->buffer;
-    self->iocb.aio_nbytes = nbytes;
-    self->py_buffer = PyMemoryView_FromMemory(self->buffer, nbytes, PyBUF_READ);
+    self->buf = PyMem_Calloc(nbytes, sizeof(char));
+    self->buf_size = nbytes;
+    self->py_buffer = PyMemoryView_FromMemory(self->buf, nbytes, PyBUF_READ);
 
     Py_INCREF(self->py_buffer);
 
-    self->iocb.aio_lio_opcode = IOCB_CMD_PREAD;
+    self->opcode = THAIO_READ;
 
 	return (PyObject*) self;
 }
@@ -504,22 +464,18 @@ static PyObject* AIOOperation_write(
         return NULL;
     }
 
-    memset(&self->iocb, 0, sizeof(struct iocb));
+    // unused
+    uint16_t priority;
 
-    self->iocb.aio_data = self;
-
-    self->context = NULL;
-    self->buffer = NULL;
+    self->buf = NULL;
     self->py_buffer = NULL;
-
-    Py_ssize_t nbytes = 0;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "OI|LH", kwlist,
         &(self->py_buffer),
-        &(self->iocb.aio_fildes),
-        &(self->iocb.aio_offset),
-        &(self->iocb.aio_reqprio)
+        &(self->fileno),
+        &(self->offset),
+        &priority
     );
 
     if (!argIsOk) return NULL;
@@ -535,12 +491,12 @@ static PyObject* AIOOperation_write(
 
     Py_INCREF(self->py_buffer);
 
-    self->iocb.aio_lio_opcode = IOCB_CMD_PWRITE;
+    self->opcode = THAIO_WRITE;
 
     if (PyBytes_AsStringAndSize(
             self->py_buffer,
-            &self->buffer,
-            &nbytes
+            &self->buf,
+            &self->buf_size
     )) {
         Py_XDECREF(self);
         PyErr_SetString(
@@ -549,9 +505,6 @@ static PyObject* AIOOperation_write(
         );
         return NULL;
     }
-
-    self->iocb.aio_nbytes = nbytes;
-    self->iocb.aio_buf = (uint64_t) self->buffer;
 
 	return (PyObject*) self;
 }
@@ -581,17 +534,15 @@ static PyObject* AIOOperation_fsync(
         return NULL;
     }
 
-    memset(&self->iocb, 0, sizeof(struct iocb));
+    uint16_t priority;
 
-    self->iocb.aio_data = self;
-    self->context = NULL;
-    self->buffer = NULL;
+    self->buf = NULL;
     self->py_buffer = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "I|H", kwlist,
-        &(self->iocb.aio_fildes),
-        &(self->iocb.aio_reqprio)
+        &(self->fileno),
+        &priority
     );
 
     if (!argIsOk) return NULL;
@@ -624,21 +575,19 @@ static PyObject* AIOOperation_fdsync(
         return NULL;
     }
 
-    memset(&self->iocb, 0, sizeof(struct iocb));
-
-    self->iocb.aio_data = self;
-    self->buffer = NULL;
+    self->buf = NULL;
     self->py_buffer = NULL;
+    uint16_t priority;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "I|H", kwlist,
-        &(self->iocb.aio_fildes),
-        &(self->iocb.aio_reqprio)
+        &(self->fileno),
+        &priority
     );
 
     if (!argIsOk) return NULL;
 
-    self->iocb.aio_lio_opcode = IOCB_CMD_FDSYNC;
+    self->opcode = THAIO_FDSYNC;
 
 	return (PyObject*) self;
 }
@@ -654,13 +603,13 @@ PyDoc_STRVAR(AIOOperation_get_value_docstring,
 static PyObject* AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
 ) {
-    switch (self->iocb.aio_lio_opcode) {
-        case IOCB_CMD_PREAD:
+    switch (self->opcode) {
+        case THAIO_READ:
             return PyBytes_FromStringAndSize(
-                self->buffer, self->iocb.aio_nbytes
+                self->buf, self->buf_size
             );
 
-        case IOCB_CMD_PWRITE:
+        case THAIO_WRITE:
             return self->py_buffer;
     }
 
@@ -710,23 +659,13 @@ static PyObject* AIOOperation_set_callback(
 */
 static PyMemberDef AIOOperation_members[] = {
     {
-        "context", T_OBJECT,
-        offsetof(AIOOperation, context),
-        READONLY, "context object"
-    },
-    {
         "fileno", T_UINT,
-        offsetof(AIOOperation, iocb.aio_fildes),
+        offsetof(AIOOperation, fileno),
         READONLY, "file descriptor"
     },
     {
-        "priority", T_USHORT,
-        offsetof(AIOOperation, iocb.aio_reqprio),
-        READONLY, "request priority"
-    },
-    {
         "offset", T_ULONGLONG,
-        offsetof(AIOOperation, iocb.aio_offset),
+        offsetof(AIOOperation, offset),
         READONLY, "offset"
     },
     {
@@ -736,8 +675,18 @@ static PyMemberDef AIOOperation_members[] = {
     },
     {
         "nbytes", T_ULONGLONG,
-        offsetof(AIOOperation, iocb.aio_nbytes),
+        offsetof(AIOOperation, buf_size),
         READONLY, "nbytes"
+    },
+    {
+        "result", T_INT,
+        offsetof(AIOOperation, result),
+        READONLY, "result"
+    },
+    {
+        "error", T_INT,
+        offsetof(AIOOperation, error),
+        READONLY, "error"
     },
     {NULL}  /* Sentinel */
 };
@@ -790,7 +739,7 @@ static PyTypeObject
 AIOOperationType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "aio.AIOOperation",
-    .tp_doc = "linux aio operation representation",
+    .tp_doc = "thread aio operation representation",
     .tp_basicsize = sizeof(AIOOperation),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
@@ -801,21 +750,23 @@ AIOOperationType = {
 };
 
 
-static PyModuleDef linux_aio_module = {
+static PyModuleDef thread_aio_module = {
     PyModuleDef_HEAD_INIT,
-    .m_name = "linux_aio",
-    .m_doc = "Linux AIO c API bindings.",
+    .m_name = "thread_aio",
+    .m_doc = "Thread based AIO.",
     .m_size = -1,
 };
 
 
-PyMODINIT_FUNC PyInit_linux_aio(void) {
+PyMODINIT_FUNC PyInit_thread_aio(void) {
     AIOContextTypeP = &AIOContextType;
     AIOOperationTypeP = &AIOOperationType;
 
+    PyEval_InitThreads();
+
     PyObject *m;
 
-    m = PyModule_Create(&linux_aio_module);
+    m = PyModule_Create(&thread_aio_module);
 
     if (m == NULL) return NULL;
 

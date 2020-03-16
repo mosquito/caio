@@ -1,15 +1,11 @@
 import asyncio
-import platform
 
 
-if 'linux' in platform.system().lower():
-    from .linux_aio import Context, Operation
-else:
-    from .thread_aio import Context, Operation
+from .linux_aio import Context, Operation
 
 
 class AsyncioContext:
-    MAX_REQUESTS_DEFAULT = 128
+    MAX_REQUESTS_DEFAULT = 512
 
     def __init__(self, max_requests=MAX_REQUESTS_DEFAULT, loop=None):
         self.context = Context(max_requests=max_requests)

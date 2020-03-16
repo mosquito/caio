@@ -3,7 +3,7 @@ import asyncio
 import os
 import time
 
-from caio.linux_aio_asyncio import AsyncioContext
+from caio.thread_aio_asyncio import AsyncioContext
 
 
 loop = asyncio.get_event_loop()
