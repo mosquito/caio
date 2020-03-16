@@ -18,25 +18,32 @@ class AsyncioContext:
         if not isinstance(op, Operation):
             raise ValueError("Operation object expected")
 
+        def on_done(result):
+            self.loop.call_soon_threadsafe(future.set_result, result)
+
         future = self.loop.create_future()
-        op.set_callback(future.set_result)
+        op.set_callback(on_done)
 
         self.context.submit(op)
 
         return await future
 
     async def read(self, nbytes: int, fd: int, offset: int) -> bytes:
-        op = Operation.read(nbytes, fd, offset)
-        await self.submit(op)
-        return op.get_value()
+        async with self.semaphore:
+            op = Operation.read(nbytes, fd, offset)
+            await self.submit(op)
+            return op.get_value()
 
     async def write(self, payload: bytes, fd: int, offset: int) -> int:
-        return await self.submit(
-            Operation.write(payload, fd, offset)
-        )
+        async with self.semaphore:
+            return await self.submit(
+                Operation.write(payload, fd, offset)
+            )
 
     async def fsync(self, fd: int):
-        await self.submit(Operation.fsync(fd))
+        async with self.semaphore:
+            await self.submit(Operation.fsync(fd))
 
     async def fdsync(self, fd: int):
-        await self.submit(Operation.fdsync(fd))
+        async with self.semaphore:
+            await self.submit(Operation.fdsync(fd))

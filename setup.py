@@ -6,13 +6,7 @@ OS_NAME = platform.system().lower()
 extensions = []
 
 
-if "linux" in OS_NAME:
-    extensions.append(
-        Extension(
-            "caio.linux_aio", ["caio/linux_aio.c"], extra_compile_args=["-g"]
-        ),
-    )
-elif "darwin" in OS_NAME:
+if "darwin" in OS_NAME or "linux" in OS_NAME:
     extensions.append(
         Extension(
             "caio.thread_aio",
@@ -21,6 +15,12 @@ elif "darwin" in OS_NAME:
                 "caio/src/threadpool/threadpool.c",
             ],
             extra_compile_args=["-g"],
+        ),
+    )
+if "linux" in OS_NAME:
+    extensions.append(
+        Extension(
+            "caio.linux_aio", ["caio/linux_aio.c"], extra_compile_args=["-g"]
         ),
     )
 
