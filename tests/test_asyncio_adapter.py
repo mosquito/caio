@@ -3,24 +3,24 @@ import os
 
 import pytest
 
-from caio import AsyncioAIOContext
+from caio import AsyncioContext
 
 
 def test_context():
-    assert AsyncioAIOContext()
+    assert AsyncioContext()
 
     with pytest.raises(SystemError):
-        assert AsyncioAIOContext(-1)
+        assert AsyncioContext(-1)
 
     with pytest.raises(SystemError):
-        assert AsyncioAIOContext(65534)
+        assert AsyncioContext(65534)
 
 
 def test_adapter(tmp_path):
     loop = asyncio.get_event_loop()
 
     async def run():
-        context = AsyncioAIOContext()
+        context = AsyncioContext()
         with open(os.path.join(tmp_path, "temp.bin"), "wb+") as fp:
             fd = fp.fileno()
 
@@ -48,7 +48,7 @@ def test_bad_file_descritor(tmp_path):
     loop = asyncio.get_event_loop()
 
     async def run():
-        context = AsyncioAIOContext()
+        context = AsyncioContext()
         with open(os.path.join(tmp_path, "temp.bin"), "wb+") as fp:
             fd = fp.fileno()
 

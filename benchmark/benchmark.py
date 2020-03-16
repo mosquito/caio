@@ -3,7 +3,7 @@ import asyncio
 import os
 import time
 
-from caio import AsyncioAIOContext
+from caio import AsyncioContext
 
 
 loop = asyncio.get_event_loop()
@@ -13,7 +13,7 @@ chunk_size = 512 * 1024
 context_max_requests = 16
 
 
-async def read_file(ctx: AsyncioAIOContext, file_id):
+async def read_file(ctx: AsyncioContext, file_id):
     offset = 0
     fname = f"data/{file_id}.bin"
     file_size = os.stat(fname).st_size
@@ -39,7 +39,7 @@ async def timer(future):
 async def main():
     print("files   nr      min   madian      max   op/s    total  #ops chunk")
     for generation in range(1, 129):
-        context = AsyncioAIOContext(context_max_requests)
+        context = AsyncioContext(context_max_requests)
 
         futures = []
 
