@@ -1,5 +1,6 @@
 import asyncio
 
+import tracemalloc
 import os
 import time
 
@@ -38,6 +39,10 @@ async def timer(future):
 
 async def main():
     print("files   nr      min   madian      max   op/s    total  #ops chunk")
+    tracemalloc.start()
+
+    snapshot1 = tracemalloc.take_snapshot()
+
     for generation in range(1, 129):
         context = AsyncioContext(context_max_requests)
 
@@ -80,6 +85,15 @@ async def main():
         )
 
         await context.close()
+
+        snapshot2 = tracemalloc.take_snapshot()
+
+        top_stats = snapshot2.compare_to(snapshot1, 'lineno')
+
+        # print("[ Top 10 differences ]")
+        # for stat in top_stats[:10]:
+        #     print(stat)
+
 
 
 if __name__ == "__main__":

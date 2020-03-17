@@ -32,6 +32,7 @@ typedef struct {
     int error;
     Py_ssize_t buf_size;
     char* buf;
+    void* ctx;
 } AIOOperation;
 
 
@@ -143,9 +144,12 @@ void worker(void *arg) {
     state = PyGILState_Ensure();
     AIOOperation* op = arg;
 
-    if (op->opcode == THAIO_NOOP) return;
-
-    Py_INCREF(op);
+    if (op->opcode == THAIO_NOOP) {
+        Py_XDECREF(op);
+        Py_XDECREF((PyObject*) op->ctx);
+        PyGILState_Release(state);
+        return;
+    }
 
     int fileno = op->fileno;
     int offset = op->offset;
@@ -155,7 +159,6 @@ void worker(void *arg) {
     PyGILState_Release(state);
 
     int result;
-    int err;
 
     switch (op->opcode) {
         case THAIO_WRITE:
@@ -181,9 +184,14 @@ void worker(void *arg) {
     }
 
     if (op->callback != NULL) {
-        PyObject_CallFunction(op->callback, "O", op);
+        PyObject_CallFunction(op->callback, "i", result);
     }
+
     Py_XDECREF(op);
+    Py_XDECREF((PyObject*) op->ctx);
+
+    op->ctx = NULL;
+
     PyGILState_Release(state);
 }
 
@@ -241,7 +249,7 @@ static PyObject* AIOContext_submit(
     }
 
     if (self->pool == NULL) {
-        PyErr_SetString(PyExc_RuntimeError, "self->ctx is NULL");
+        PyErr_SetString(PyExc_RuntimeError, "self->pool is NULL");
         return NULL;
     }
 
@@ -253,7 +261,7 @@ static PyObject* AIOContext_submit(
     uint32_t nr = PyTuple_Size(args);
 
     PyObject* obj;
-    AIOOperation** ops = (AIOOperation**) PyMem_Calloc(nr, sizeof(AIOOperation*));
+    AIOOperation* ops[nr];
 
     for (uint32_t i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
@@ -267,9 +275,7 @@ static PyObject* AIOContext_submit(
         }
 
         ops[i] = (AIOOperation*) obj;
-
-        Py_INCREF(self);
-        Py_INCREF(ops[i]);
+        ops[i]->ctx = (void*) self;
     }
 
     uint32_t i=0;
@@ -278,6 +284,8 @@ static PyObject* AIOContext_submit(
     for (; i < nr; i++) {
         result = threadpool_add(self->pool, worker, (void*) ops[i], 0);
         if (process_pool_error(result) < 0) return NULL;
+        Py_INCREF(ops[i]);
+        Py_INCREF(self);
     }
 
     return (PyObject*) PyLong_FromSsize_t(i);
@@ -333,9 +341,12 @@ AIOContextType = {
 
 static void
 AIOOperation_dealloc(AIOOperation *self) {
-    if (self->callback != NULL) {
-        Py_XDECREF(self->callback);
-        self->callback = NULL;
+    Py_XDECREF(self->callback);
+    self->callback = NULL;
+
+    if (self->opcode == THAIO_READ && self->buf != NULL) {
+        PyMem_Free(self->buf);
+        self->buf = NULL;
     }
 
     Py_XDECREF(self->py_buffer);
