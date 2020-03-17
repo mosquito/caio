@@ -1,6 +1,4 @@
 import asyncio
-
-import tracemalloc
 import os
 import time
 
@@ -10,7 +8,7 @@ from caio.thread_aio_asyncio import AsyncioContext
 loop = asyncio.get_event_loop()
 
 
-chunk_size = 512 * 1024
+chunk_size = 512 # * 1024
 context_max_requests = 16
 
 
@@ -23,10 +21,13 @@ async def read_file(ctx: AsyncioContext, file_id):
         fd = fp.fileno()
 
         c = 0
+        futures = []
         while offset < file_size:
-            await ctx.read(chunk_size, fd, offset)
+            futures.append(ctx.read(chunk_size, fd, offset))
             offset += chunk_size
             c += 1
+
+        await asyncio.gather(*futures)
 
     return c
 
@@ -39,10 +40,6 @@ async def timer(future):
 
 async def main():
     print("files   nr      min   madian      max   op/s    total  #ops chunk")
-    tracemalloc.start()
-
-    snapshot1 = tracemalloc.take_snapshot()
-
     for generation in range(1, 129):
         context = AsyncioContext(context_max_requests)
 
@@ -85,15 +82,6 @@ async def main():
         )
 
         await context.close()
-
-        snapshot2 = tracemalloc.take_snapshot()
-
-        top_stats = snapshot2.compare_to(snapshot1, 'lineno')
-
-        # print("[ Top 10 differences ]")
-        # for stat in top_stats[:10]:
-        #     print(stat)
-
 
 
 if __name__ == "__main__":

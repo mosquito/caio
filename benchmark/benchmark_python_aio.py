@@ -3,12 +3,13 @@ import asyncio
 import os
 import time
 
-from caio import AsyncioContext
+from caio.python_aio_asyncio import AsyncioContext
 
 
 loop = asyncio.get_event_loop()
 
-chunk_size = 512 * 1024
+
+chunk_size = 512 # 1024
 context_max_requests = 16
 
 
@@ -21,13 +22,10 @@ async def read_file(ctx: AsyncioContext, file_id):
         fd = fp.fileno()
 
         c = 0
-        futures = []
         while offset < file_size:
-            futures.append(ctx.read(chunk_size, fd, offset))
+            await ctx.read(chunk_size, fd, offset)
             offset += chunk_size
             c += 1
-
-        await asyncio.gather(*futures)
 
     return c
 
