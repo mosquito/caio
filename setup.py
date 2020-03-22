@@ -12,9 +12,10 @@ if "darwin" in OS_NAME or "linux" in OS_NAME:
             "caio.thread_aio",
             [
                 "caio/thread_aio.c",
-                "caio/src/threadpool/threadpool.c",
+                "caio/src/lfqueue/lfq.c",
             ],
             extra_compile_args=["-g"],
+            include_dirs=["caio/src/lfqueue"],
         ),
     )
 if "linux" in OS_NAME:
@@ -29,7 +30,11 @@ setup(
     name="caio",
     version="0.0.4",
     packages=["caio"],
-    package_data={"caio": ["caio/linux_aio.pyi"]},
+    package_data={"caio": [
+        "caio/linux_aio.pyi",
+        "caio/thread_aio.pyi"
+    ]},
     long_description=open("README.rst").read(),
     ext_modules=extensions,
+    include_package_data=True,
 )

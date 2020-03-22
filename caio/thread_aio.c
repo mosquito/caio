@@ -5,19 +5,36 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <structmember.h>
+#include <pthread.h>
 
-#include "src/threadpool/threadpool.h"
+#include "lfq.h"
 
+
+#define MAX_THREADS 254
 
 static const unsigned CTX_POOL_SIZE_DEFAULT = 8;
 static const unsigned CTX_MAX_REQUESTS_DEFAULT = 512;
 
+typedef struct lfq_ctx lfq_ctx_t;
+
+
+enum {
+    TP_STATE_RUNNING,
+    TP_STATE_OK,
+    TP_STATE_SHUTDOWN
+}
 
 typedef struct {
     PyObject_HEAD
     threadpool_t* pool;
     uint16_t max_requests;
     uint8_t pool_size;
+    lfq_ctx_t *taskq;
+    lfq_ctx_t *resultq;
+    pthread_mutex_t lock;
+    pthread_cond_t notify;
+    pthread_t *threads;
+    int state;
 } AIOContext;
 
 
@@ -31,8 +48,8 @@ typedef struct {
     int result;
     int error;
     Py_ssize_t buf_size;
-    char* buf;
     void* ctx;
+    char* buf;
 } AIOOperation;
 
 
@@ -72,6 +89,74 @@ AIOContext_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
     return (PyObject *) self;
 }
 
+
+static void* thread_worker(void* ctx) {
+    AIOContext *context = (AIOContext*) ctx;
+
+    int   tid;
+    pthread_t thread;
+    self = pthread_self();
+    pthread_getunique_np(&thread, &tid);
+
+    PyGILState_STATE state = PyGILState_Ensure();
+    Py_INCREF(context);
+    PyGILState_Release(state);
+
+    AIOOperation *op;
+    int fileno;
+    int offset;
+    int buf_size;
+    char* buf;
+
+    for (;;) {
+        pthread_mutex_lock(&(context->lock));
+
+        while((context->state != TP_STATE_SHUTDOWN)) {
+            if (pthread_cond_wait(&(context->notify), &(context->lock)) == 0) {
+                break;
+            }
+        }
+
+        if (context->state == TP_STATE_SHUTDOWN) {
+            state = PyGILState_Ensure();
+            Py_DECREF(context);
+            PyGILState_Release(state);
+            return;
+        }
+
+        for (;;) {
+            op = lfq_dequeue_tid(context->taskq, tid);
+            if (op ==  NULL) {
+                cond = 0;
+                break;
+            }
+
+            fileno = op->fileno;
+            offset = op->offset;
+            buf_size = op->buf_size;
+            buf = op->buf;
+
+            switch (op->opcode) {
+                case THAIO_WRITE:
+                    result = pwrite(fileno, (const char*) buf, buf_size, offset);
+                    break;
+                case THAIO_FSYNC:
+                    result = fsync(fileno);
+                    break;
+                case THAIO_FDSYNC:
+                    result = fdatasync(fileno);
+                    break;
+                case THAIO_READ:
+                    result = pread(fileno, buf, buf_size, offset);
+                    break;
+            }
+
+            lfq_enqueue(context->resultq, op);
+        }
+    }
+}
+
+
 static int
 AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
 {
@@ -81,8 +166,8 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
     self->max_requests = 0;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|HH", kwlist,
-            &self->max_requests, &self->pool_size
+        args, kwds, "|HH", kwlist,
+        &self->max_requests, &self->pool_size
     )) return -1;
 
     if (self->max_requests <= 0) {
@@ -111,16 +196,67 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    self->pool = threadpool_create(self->pool_size, self->max_requests, 0);
+    if (lfq_init(self->taskq, self->pool_size)) {
+        PyErr_SetFromErrno(PyExc_SystemError);
+        return -1;
+    }
+
+    if (lfq_init(self->resultq, self->pool_size)) {
+        PyErr_SetFromErrno(PyExc_SystemError);
+        return -1;
+    }
+
+    self->threads = (pthread_t *)PyMem_Calloc(thread_count, sizeof(pthread_t));
+
+    if (self->threads == NULL) {
+        PyErr_SetString(
+            PyExc_MemoryError,
+            "Failed to allocate memory",
+        );
+        return -1;
+    }
+
+    if((pthread_mutex_init(&(self->lock), NULL)) ||
+       (pthread_cond_init(&(self->notify), NULL))) {
+        PyErr_Format(
+           PyExc_RuntimeError,
+           "Failed to allocate mutex and condition",
+       );
+       return -1;
+    }
 
     if (self->pool == NULL) {
-        PyErr_Format(
+        PyErr_SetString(
             PyExc_RuntimeError,
             "Pool initialization failed size=%d max_requests=%d",
             self->pool_size, self->max_requests
         );
         return -1;
     }
+
+    self->state = TP_STATE_RUNNING;
+
+    int result;
+    int i;
+
+    for(i = 0; i < self->pool_size; i++) {
+        errno = pthread_create(
+            &(self->threads[i]), NULL, threadpool_thread, (void*)self
+        );
+
+        if(errno && i) {
+            PyErr_SetFromErrno(PyExc_SystemError);
+            if(pthread_mutex_lock(&(self->lock))) return -1;
+            self->state = TP_STATE_SHUTDOWN;
+            pthread_cond_broadcast(&(self->notify);
+            pthread_mutex_unlock(&(pool->lock));
+            return -1;
+        }
+        pool->thread_count++;
+        pool->started++;
+    }
+
+    self->state = TP_STATE_OK;
 
     return 0;
 }
@@ -145,8 +281,8 @@ void worker(void *arg) {
     AIOOperation* op = arg;
 
     if (op->opcode == THAIO_NOOP) {
-        Py_XDECREF(op);
-        Py_XDECREF((PyObject*) op->ctx);
+        Py_DECREF((PyObject*) op->ctx);
+        Py_DECREF(op);
         PyGILState_Release(state);
         return;
     }
@@ -159,6 +295,10 @@ void worker(void *arg) {
     PyGILState_Release(state);
 
     int result;
+
+    pthread_t self = pthread_self();
+    int tid;
+    pthread_getunique_np(&self, &tid);
 
     switch (op->opcode) {
         case THAIO_WRITE:
@@ -187,10 +327,11 @@ void worker(void *arg) {
         PyObject_CallFunction(op->callback, "i", result);
     }
 
-    Py_XDECREF(op);
-    Py_XDECREF((PyObject*) op->ctx);
-
+    AIOContext* ctx = op->ctx;
     op->ctx = NULL;
+
+    Py_DECREF((PyObject*) ctx);
+    Py_DECREF(op);
 
     PyGILState_Release(state);
 }
@@ -262,6 +403,7 @@ static PyObject* AIOContext_submit(
 
     PyObject* obj;
     AIOOperation* ops[nr];
+    AIOOperation* op;
 
     for (uint32_t i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
@@ -274,8 +416,10 @@ static PyObject* AIOContext_submit(
             return NULL;
         }
 
-        ops[i] = (AIOOperation*) obj;
-        ops[i]->ctx = (void*) self;
+        op = obj;
+        op->ctx = self;
+
+        ops[i] = op;
     }
 
     uint32_t i=0;
@@ -285,7 +429,7 @@ static PyObject* AIOContext_submit(
         result = threadpool_add(self->pool, worker, (void*) ops[i], 0);
         if (process_pool_error(result) < 0) return NULL;
         Py_INCREF(ops[i]);
-        Py_INCREF(self);
+        Py_INCREF(ops[i]->ctx);
     }
 
     return (PyObject*) PyLong_FromSsize_t(i);
@@ -330,7 +474,7 @@ AIOContextType = {
     .tp_basicsize = sizeof(AIOContext),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_new = AIOContext_new,
+    .tp_new = (newfunc) AIOContext_new,
     .tp_init = (initproc) AIOContext_init,
     .tp_dealloc = (destructor) AIOContext_dealloc,
     .tp_members = AIOContext_members,
@@ -339,18 +483,30 @@ AIOContextType = {
 };
 
 
+static PyObject *
+AIOOperation_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    AIOOperation *self;
+
+    self = (AIOOperation *) type->tp_alloc(type, 0);
+
+    if (self == NULL) {
+        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
+        return NULL;
+    }
+
+    return (PyObject *) self;
+}
+
 static void
 AIOOperation_dealloc(AIOOperation *self) {
-    Py_XDECREF(self->callback);
-    self->callback = NULL;
+    Py_CLEAR(self->ctx);
+    Py_CLEAR(self->callback);
+    Py_XDECREF(self->py_buffer);
+    Py_CLEAR(self->py_buffer);
 
     if (self->opcode == THAIO_READ && self->buf != NULL) {
         PyMem_Free(self->buf);
-        self->buf = NULL;
     }
-
-    Py_XDECREF(self->py_buffer);
-    self->py_buffer = NULL;
 
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
@@ -405,17 +561,11 @@ PyDoc_STRVAR(AIOOperation_read_docstring,
 static PyObject* AIOOperation_read(
     PyTypeObject *type, PyObject *args, PyObject *kwds
 ) {
-    AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
+    AIOOperation *self = (AIOOperation *) PyObject_CallFunction(type, "");
 
     static char *kwlist[] = {"nbytes", "fd", "offset", "priority", NULL};
 
-    if (self == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
-        return NULL;
-    }
-
     self->buf = NULL;
-    self->py_buffer = NULL;
 
     uint64_t nbytes = 0;
     uint16_t priority;
@@ -431,7 +581,7 @@ static PyObject* AIOOperation_read(
     if (!argIsOk) return NULL;
 
     if (nbytes == 0) {
-        Py_XDECREF(self);
+        Py_CLEAR(self);
         PyErr_SetString(
             PyExc_ValueError,
             "nbytes must be grater then zero"
@@ -443,10 +593,9 @@ static PyObject* AIOOperation_read(
     self->buf_size = nbytes;
     self->py_buffer = PyMemoryView_FromMemory(self->buf, nbytes, PyBUF_READ);
 
-    Py_INCREF(self->py_buffer);
-
     self->opcode = THAIO_READ;
 
+    Py_INCREF(self->py_buffer);
 	return (PyObject*) self;
 }
 
@@ -466,20 +615,14 @@ PyDoc_STRVAR(AIOOperation_write_docstring,
 static PyObject* AIOOperation_write(
     PyTypeObject *type, PyObject *args, PyObject *kwds
 ) {
-    AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
+    AIOOperation *self = (AIOOperation *) PyObject_CallFunction(type, "");
 
     static char *kwlist[] = {"payload_bytes", "fd", "offset", "priority", NULL};
-
-    if (self == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
-        return NULL;
-    }
 
     // unused
     uint16_t priority;
 
     self->buf = NULL;
-    self->py_buffer = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "OI|LH", kwlist,
@@ -492,15 +635,13 @@ static PyObject* AIOOperation_write(
     if (!argIsOk) return NULL;
 
     if (!PyBytes_Check(self->py_buffer)) {
-        Py_XDECREF(self);
+        Py_CLEAR(self);
         PyErr_SetString(
             PyExc_ValueError,
             "payload_bytes argument must be bytes"
         );
         return NULL;
     }
-
-    Py_INCREF(self->py_buffer);
 
     self->opcode = THAIO_WRITE;
 
@@ -509,7 +650,7 @@ static PyObject* AIOOperation_write(
             &self->buf,
             &self->buf_size
     )) {
-        Py_XDECREF(self);
+        Py_CLEAR(self);
         PyErr_SetString(
             PyExc_RuntimeError,
             "Can not convert bytes to c string"
@@ -517,6 +658,7 @@ static PyObject* AIOOperation_write(
         return NULL;
     }
 
+    Py_INCREF(self->py_buffer);
 	return (PyObject*) self;
 }
 
@@ -536,14 +678,9 @@ PyDoc_STRVAR(AIOOperation_fsync_docstring,
 static PyObject* AIOOperation_fsync(
     PyTypeObject *type, PyObject *args, PyObject *kwds
 ) {
-    AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
+    AIOOperation *self = (AIOOperation *) PyObject_CallFunction(type, "");
 
     static char *kwlist[] = {"fd", "priority", NULL};
-
-    if (self == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
-        return NULL;
-    }
 
     uint16_t priority;
 
@@ -577,14 +714,9 @@ PyDoc_STRVAR(AIOOperation_fdsync_docstring,
 static PyObject* AIOOperation_fdsync(
     PyTypeObject *type, PyObject *args, PyObject *kwds
 ) {
-    AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
+    AIOOperation *self = (AIOOperation *) PyObject_CallFunction(type, "");
 
     static char *kwlist[] = {"fd", "priority", NULL};
-
-    if (self == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
-        return NULL;
-    }
 
     self->buf = NULL;
     self->py_buffer = NULL;
@@ -659,8 +791,8 @@ static PyObject* AIOOperation_set_callback(
         return NULL;
     }
 
-    Py_INCREF(callback);
     self->callback = callback;
+    Py_INCREF(callback);
 
     Py_RETURN_TRUE;
 }
@@ -750,6 +882,7 @@ static PyTypeObject
 AIOOperationType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "aio.AIOOperation",
+    .tp_new = (newfunc) AIOOperation_new,
     .tp_doc = "thread aio operation representation",
     .tp_basicsize = sizeof(AIOOperation),
     .tp_itemsize = 0,

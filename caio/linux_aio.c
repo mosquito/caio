@@ -60,10 +60,9 @@ static PyTypeObject* AIOContextTypeP = NULL;
 static void
 AIOContext_dealloc(AIOContext *self) {
     if (self->ctx != 0) {
-        aio_context_t ctx = self->ctx;
+        io_destroy(self->ctx);
         self->ctx = 0;
 
-        io_destroy(ctx);
     }
 
     if (self->fileno >= 0) {
@@ -157,7 +156,7 @@ static PyObject* AIOContext_submit(
     PyObject* obj;
     AIOOperation* op;
 
-    struct iocb** iocbpp = PyMem_Calloc(nr, sizeof(struct iocb*));
+    struct iocb* iocbpp[nr];
 
     for (uint32_t i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
@@ -174,7 +173,6 @@ static PyObject* AIOContext_submit(
 
         op->context = self;
         Py_INCREF(self);
-
         Py_INCREF(op);
 
         op->iocb.aio_flags |= IOCB_FLAG_RESFD;
@@ -190,8 +188,6 @@ static PyObject* AIOContext_submit(
         return NULL;
     }
 
-    PyMem_Free(iocbpp);
-
     return (PyObject*) PyLong_FromSsize_t(result);
 }
 
@@ -203,7 +199,7 @@ static PyObject* AIOContext_process_events(
     AIOContext *self, PyObject *args, PyObject *kwds
 ) {
     if (self->ctx == 0) {
-        PyErr_SetNone(PyExc_RuntimeError);
+        PyErr_SetString(PyExc_RuntimeError, "Context is NULL");
         return NULL;
     }
 
@@ -256,6 +252,11 @@ static PyObject* AIOContext_process_events(
         op = (AIOOperation*) ev->data;
         op->iocb.aio_nbytes = ev->res;
 
+        Py_DECREF(op);
+
+        Py_DECREF(op->context);
+        op->context = NULL;
+
         if (op->callback == NULL) {
             continue;
         }
@@ -263,8 +264,6 @@ static PyObject* AIOContext_process_events(
         if (PyObject_CallFunction(op->callback, "K", ev->res) == NULL) {
             return NULL;
         }
-
-        Py_XDECREF(op);
     }
 
     return (PyObject*) PyLong_FromSsize_t(i);
@@ -357,25 +356,31 @@ AIOContextType = {
 };
 
 
-static void
-AIOOperation_dealloc(AIOOperation *self) {
-    if (self->context != NULL) {
-        Py_XDECREF(self->context);
-        self->context = NULL;
+static PyObject *
+AIOOperation_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    AIOOperation *self;
+
+    self = (AIOOperation *) type->tp_alloc(type, 0);
+
+    if (self == NULL) {
+        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
+        return NULL;
     }
 
-    if (self->callback != NULL) {
-        Py_XDECREF(self->callback);
-        self->callback = NULL;
-    }
+    return (PyObject *) self;
+}
+
+
+static void
+AIOOperation_dealloc(AIOOperation *self) {
+    Py_CLEAR(self->context);
+    Py_CLEAR(self->callback);
+    Py_XDECREF(self->py_buffer);
+    Py_CLEAR(self->py_buffer);
 
     if (self->iocb.aio_lio_opcode == IOCB_CMD_PREAD && self->buffer != NULL) {
         PyMem_Free(self->buffer);
-        self->buffer = NULL;
     }
-
-    Py_XDECREF(self->py_buffer);
-    self->py_buffer = NULL;
 
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
@@ -430,14 +435,9 @@ PyDoc_STRVAR(AIOOperation_read_docstring,
 static PyObject* AIOOperation_read(
     PyTypeObject *type, PyObject *args, PyObject *kwds
 ) {
-    AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
+    AIOOperation *self = (AIOOperation *) PyObject_CallFunction(type, "");
 
     static char *kwlist[] = {"nbytes", "fd", "offset", "priority", NULL};
-
-    if (self == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
-        return NULL;
-    }
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
@@ -495,14 +495,9 @@ PyDoc_STRVAR(AIOOperation_write_docstring,
 static PyObject* AIOOperation_write(
     PyTypeObject *type, PyObject *args, PyObject *kwds
 ) {
-    AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
+    AIOOperation *self = (AIOOperation *) PyObject_CallFunction(type, "");
 
     static char *kwlist[] = {"payload_bytes", "fd", "offset", "priority", NULL};
-
-    if (self == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
-        return NULL;
-    }
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
@@ -572,14 +567,9 @@ PyDoc_STRVAR(AIOOperation_fsync_docstring,
 static PyObject* AIOOperation_fsync(
     PyTypeObject *type, PyObject *args, PyObject *kwds
 ) {
-    AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
+    AIOOperation *self = (AIOOperation *) PyObject_CallFunction(type, "");
 
     static char *kwlist[] = {"fd", "priority", NULL};
-
-    if (self == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
-        return NULL;
-    }
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
@@ -615,14 +605,9 @@ PyDoc_STRVAR(AIOOperation_fdsync_docstring,
 static PyObject* AIOOperation_fdsync(
     PyTypeObject *type, PyObject *args, PyObject *kwds
 ) {
-    AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
+    AIOOperation *self = (AIOOperation *) PyObject_CallFunction(type, "");
 
     static char *kwlist[] = {"fd", "priority", NULL};
-
-    if (self == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "can not allocate memory");
-        return NULL;
-    }
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
@@ -790,6 +775,7 @@ static PyTypeObject
 AIOOperationType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "aio.AIOOperation",
+    .tp_new = AIOOperation_new,
     .tp_doc = "linux aio operation representation",
     .tp_basicsize = sizeof(AIOOperation),
     .tp_itemsize = 0,

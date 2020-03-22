@@ -1,11 +1,11 @@
 import asyncio
 import csv
-import gc
 
 import os
 import time
 from glob import glob
 from contextlib import ExitStack
+from itertools import chain
 
 implementation = os.environ.get("IMPL")
 
@@ -66,65 +66,67 @@ header = "\n nr       min   median      max     op/s    total     #ops    chunk"
 async def main():
     os.makedirs("results", exist_ok=True)
 
-    for chunk_size in map(lambda x: 2 ** x, range(15, 4, -1)):
-        print(header)
+    print(header)
 
-        context = AsyncioContext(context_max_requests)
+    context = AsyncioContext(context_max_requests)
 
-        result_file = "results/%s_chunk_%s.csv" % (
-            AsyncioContext.__module__.split(".")[-1],
-            chunk_size,
+    result_file = "results/%s.csv" % (
+        AsyncioContext.__module__.split(".")[-1],
+    )
+
+    with open(result_file, "w") as res_fp:
+        results = csv.writer(
+            res_fp, delimiter=',',
+            quotechar='"', quoting=csv.QUOTE_MINIMAL
         )
 
-        with open(result_file, "w") as res_fp:
-            results = csv.writer(
-                res_fp, delimiter=',',
-                quotechar='"', quoting=csv.QUOTE_MINIMAL
+        results.writerow([
+            "nr", "min", "median",
+            "max", "ops/s", "total", "nops", "chunk_size"
+        ])
+
+        gen = chain(
+            range(2 ** 15, 1024, -32),
+            range(1024, 128, -4),
+            range(128, 16, -2),
+            range(16, 2, -1)
+        )
+
+        for chunk_size in gen:
+            total = -time.monotonic()
+
+            nops, stat = await read_files(context, chunk_size, 10000)
+
+            total += time.monotonic()
+
+            stat = sorted(stat)
+
+            ops_sec = nops / total
+
+            dmin = stat[0]
+            dmedian = stat[int(len(stat) / 2)]
+            dmax = stat[-1]
+
+            print(
+                "%4d %8d %8d %8d %8d %8d %8d %8d" % (
+                    context_max_requests,
+                    dmin * 1000000,
+                    dmedian * 1000000,
+                    dmax * 1000000,
+                    ops_sec,
+                    total * 1000000,
+                    nops,
+                    chunk_size,
+                )
             )
 
             results.writerow([
-                "nr", "min", "median",
-                "max", "ops/s", "total", "nops"
+                context_max_requests, dmin, dmedian,
+                dmax, ops_sec, total, nops, chunk_size
             ])
 
-            for max_ops in range(10, 12000, 100):
-                total = -time.monotonic()
-
-                nops, stat = await read_files(context, chunk_size, max_ops)
-
-                total += time.monotonic()
-
-                stat = sorted(stat)
-
-                ops_sec = nops / total
-
-                dmin = stat[0]
-                dmedian = stat[int(len(stat) / 2)]
-                dmax = stat[-1]
-
-                print(
-                    "%4d %8d %8d %8d %8d %8d %8d %8d" % (
-                        context_max_requests,
-                        dmin * 1000000,
-                        dmedian * 1000000,
-                        dmax * 1000000,
-                        ops_sec,
-                        total * 1000000,
-                        nops,
-                        chunk_size,
-                    )
-                )
-
-                results.writerow([
-                    context_max_requests, dmin, dmedian,
-                    dmax, ops_sec, total, nops
-                ])
-
         await context.close()
-        gc.collect()
+
 
 if __name__ == "__main__":
     loop.run_until_complete(main())
-    gc.collect()
-    print("Garbage collected")
-    time.sleep(60)
