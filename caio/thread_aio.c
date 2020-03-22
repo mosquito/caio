@@ -141,10 +141,10 @@ static PyObject* AIOContext_repr(AIOContext *self) {
 void worker(void *arg) {
     PyGILState_STATE state;
 
-    state = PyGILState_Ensure();
     AIOOperation* op = arg;
 
     if (op->opcode == THAIO_NOOP) {
+        state = PyGILState_Ensure();
         Py_XDECREF(op);
         Py_XDECREF((PyObject*) op->ctx);
         PyGILState_Release(state);
@@ -155,8 +155,6 @@ void worker(void *arg) {
     int offset = op->offset;
     int buf_size = op->buf_size;
     char* buf = op->buf;
-
-    PyGILState_Release(state);
 
     int result;
 
@@ -341,8 +339,7 @@ AIOContextType = {
 
 static void
 AIOOperation_dealloc(AIOOperation *self) {
-    Py_XDECREF(self->callback);
-    self->callback = NULL;
+    Py_CLEAR(self->callback);
 
     if (self->opcode == THAIO_READ && self->buf != NULL) {
         PyMem_Free(self->buf);
@@ -350,7 +347,7 @@ AIOOperation_dealloc(AIOOperation *self) {
     }
 
     Py_XDECREF(self->py_buffer);
-    self->py_buffer = NULL;
+    Py_CLEAR(self->py_buffer);
 
     Py_TYPE(self)->tp_free((PyObject *) self);
 }

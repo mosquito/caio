@@ -359,15 +359,8 @@ AIOContextType = {
 
 static void
 AIOOperation_dealloc(AIOOperation *self) {
-    if (self->context != NULL) {
-        Py_XDECREF(self->context);
-        self->context = NULL;
-    }
-
-    if (self->callback != NULL) {
-        Py_XDECREF(self->callback);
-        self->callback = NULL;
-    }
+    Py_CLEAR(self->context);
+    Py_CLEAR(self->callback);
 
     if (self->iocb.aio_lio_opcode == IOCB_CMD_PREAD && self->buffer != NULL) {
         PyMem_Free(self->buffer);
@@ -375,7 +368,7 @@ AIOOperation_dealloc(AIOOperation *self) {
     }
 
     Py_XDECREF(self->py_buffer);
-    self->py_buffer = NULL;
+    Py_CLEAR(self->py_buffer);
 
     Py_TYPE(self)->tp_free((PyObject *) self);
 }

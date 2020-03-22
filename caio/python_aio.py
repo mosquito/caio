@@ -16,6 +16,7 @@ class Context:
         self.pool = set()
         for _ in range(pool_size):
             thread = Thread(target=self._in_thread)
+            thread.daemon = True
             self.pool.add(thread)
             thread.start()
 
