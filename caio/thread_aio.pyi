@@ -7,7 +7,6 @@ class Context:
     def max_requests(self) -> int: ...
     def submit(self, *aio_operations) -> int: ...
 
-
 # noinspection PyPropertyDefinition
 class Operation:
     @classmethod

@@ -106,8 +106,13 @@ class OpCode(IntEnum):
 # noinspection PyPropertyDefinition
 class Operation:
     def __init__(
-            self, fd: int, nbytes: Optional[int], offset: Optional[int],
-            opcode: OpCode, payload: bytes = None, priority: int = None
+        self,
+        fd: int,
+        nbytes: Optional[int],
+        offset: Optional[int],
+        opcode: OpCode,
+        payload: bytes = None,
+        priority: int = None,
     ):
         self.callback = None
         self.buffer = None
@@ -126,7 +131,9 @@ class Operation:
         self.__priority = priority
 
     @classmethod
-    def read(cls, nbytes: int, fd: int, offset: int, priority=0) -> "Operation":
+    def read(
+        cls, nbytes: int, fd: int, offset: int, priority=0
+    ) -> "Operation":
         """
         Creates a new instance of Operation on read mode.
         """
@@ -140,8 +147,12 @@ class Operation:
         Creates a new instance of AIOOperation on write mode.
         """
         return cls(
-            fd, len(payload_bytes), offset, payload=payload_bytes,
-            opcode=OpCode.WRITE, priority=priority
+            fd,
+            len(payload_bytes),
+            offset,
+            payload=payload_bytes,
+            opcode=OpCode.WRITE,
+            priority=priority,
         )
 
     @classmethod
@@ -150,9 +161,7 @@ class Operation:
         """
         Creates a new instance of AIOOperation on fsync mode.
         """
-        return cls(
-            fd, None, None, opcode=OpCode.FSYNC, priority=priority
-        )
+        return cls(fd, None, None, opcode=OpCode.FSYNC, priority=priority)
 
     @classmethod
     def fdsync(cls, fd: int, priority=0) -> "Operation":
@@ -160,9 +169,7 @@ class Operation:
         """
         Creates a new instance of AIOOperation on fdsync mode.
         """
-        return cls(
-            fd, None, None, opcode=OpCode.FDSYNC, priority=priority
-        )
+        return cls(fd, None, None, opcode=OpCode.FDSYNC, priority=priority)
 
     def get_value(self) -> Optional[bytes]:
         """

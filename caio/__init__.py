@@ -1,3 +1,4 @@
+from caio.version import *
 import platform
 
 
@@ -11,3 +12,11 @@ else:
     except Exception:
         from .python_aio import Context, Operation
         from .python_aio_asyncio import AsyncioContext
+
+
+__all__ = (
+    "Context",
+    "Operation",
+    "__version__",
+    "__author__",
+)

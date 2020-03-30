@@ -256,12 +256,12 @@ static PyObject* AIOContext_submit(
         return NULL;
     }
 
-    uint32_t nr = PyTuple_Size(args);
+    unsigned int nr = PyTuple_Size(args);
 
     PyObject* obj;
     AIOOperation* ops[nr];
 
-    for (uint32_t i=0; i < nr; i++) {
+    for (unsigned int i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
         if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
             PyErr_Format(
@@ -276,7 +276,7 @@ static PyObject* AIOContext_submit(
         ops[i]->ctx = (void*) self;
     }
 
-    uint32_t i=0;
+    unsigned int i=0;
     int result = 0;
 
     for (; i < nr; i++) {
@@ -346,7 +346,6 @@ AIOOperation_dealloc(AIOOperation *self) {
         self->buf = NULL;
     }
 
-    Py_XDECREF(self->py_buffer);
     Py_CLEAR(self->py_buffer);
 
     Py_TYPE(self)->tp_free((PyObject *) self);
@@ -439,8 +438,6 @@ static PyObject* AIOOperation_read(
     self->buf = PyMem_Calloc(nbytes, sizeof(char));
     self->buf_size = nbytes;
     self->py_buffer = PyMemoryView_FromMemory(self->buf, nbytes, PyBUF_READ);
-
-    Py_INCREF(self->py_buffer);
 
     self->opcode = THAIO_READ;
 

@@ -2,6 +2,7 @@ import asyncio
 
 from caio.thread_aio_asyncio import AsyncioContext
 
+
 async def main():
     ctx = AsyncioContext()
 

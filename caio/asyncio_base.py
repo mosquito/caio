@@ -1,5 +1,6 @@
 import asyncio
 import abc
+from typing import Awaitable
 from contextlib import suppress
 from functools import partial
 
@@ -34,25 +35,29 @@ class AsyncioContextBase(abc.ABC):
         finally:
             self._destroy_context()
 
-    async def submit(self, op: OPERATION_CLASS):
+    def submit(self, op: OPERATION_CLASS):
         if not isinstance(op, self.OPERATION_CLASS):
             raise ValueError("Operation object expected")
 
         future = self.loop.create_future()
         self.operations.put_nowait((op, future))
 
-        return await future
+        return future
+
+    def _on_done(self, future, result):
+        """
+        In general case impossible predict current thread and the thread
+        of event loop. So have to use `call_soon_threadsave` the result setter.
+        """
+        future.add_done_callback(lambda _: self.semaphore.release())
+        self.loop.call_soon_threadsafe(future.set_result, True)
 
     async def _run(self):
-        def on_done(future, _):
-            self.loop.call_soon_threadsafe(self.semaphore.release)
-            self.loop.call_soon_threadsafe(future.set_result, True)
-
         async def step():
             requests = []
 
             op, future = await self.operations.get()
-            op.set_callback(partial(on_done, future))
+            op.set_callback(partial(self._on_done, future))
             requests.append(op)
 
             await self.semaphore.acquire()
@@ -60,7 +65,7 @@ class AsyncioContextBase(abc.ABC):
             while not self.semaphore.locked():
                 try:
                     op, future = self.operations.get_nowait()
-                    op.set_callback(partial(on_done, future))
+                    op.set_callback(partial(self._on_done, future))
                     requests.append(op)
                     self.operations.task_done()
                 except asyncio.QueueEmpty:
@@ -79,14 +84,11 @@ class AsyncioContextBase(abc.ABC):
         await self.submit(op)
         return op.get_value()
 
-    async def write(self, payload: bytes, fd: int, offset: int) -> int:
-        return await self.submit(
-            self.OPERATION_CLASS.write(payload, fd, offset)
-        )
+    def write(self, payload: bytes, fd: int, offset: int) -> Awaitable[int]:
+        return self.submit(self.OPERATION_CLASS.write(payload, fd, offset))
 
-    async def fsync(self, fd: int):
-        await self.submit(self.OPERATION_CLASS.fsync(fd))
+    def fsync(self, fd: int) -> Awaitable:
+        return self.submit(self.OPERATION_CLASS.fsync(fd))
 
-    async def fdsync(self, fd: int):
-        await self.submit(self.OPERATION_CLASS.fdsync(fd))
-
+    def fdsync(self, fd: int) -> Awaitable:
+        return self.submit(self.OPERATION_CLASS.fdsync(fd))

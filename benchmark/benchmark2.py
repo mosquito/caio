@@ -9,13 +9,13 @@ from itertools import chain
 
 implementation = os.environ.get("IMPL")
 
-if implementation == 'linux':
+if implementation == "linux":
     from caio.linux_aio_asyncio import AsyncioContext
     from caio.linux_aio import Operation
-elif implementation == 'thread':
+elif implementation == "thread":
     from caio.thread_aio_asyncio import AsyncioContext
     from caio.thread_aio import Operation
-elif implementation == 'python':
+elif implementation == "python":
     from caio.python_aio_asyncio import AsyncioContext
     from caio.python_aio import Operation
 else:
@@ -34,6 +34,7 @@ async def read_files(ctx: AsyncioContext, chunk_size, max_ops):
     total = 0
 
     with ExitStack() as stack:
+
         def operations_generator():
             nonlocal total
 
@@ -46,7 +47,7 @@ async def read_files(ctx: AsyncioContext, chunk_size, max_ops):
 
                 while offset < file_size:
                     op = Operation.read(chunk_size, fd, offset)
-                    yield ctx.submit(op)
+                    yield ctx.submit(op), op
 
                     if total >= max_ops:
                         return
@@ -56,15 +57,17 @@ async def read_files(ctx: AsyncioContext, chunk_size, max_ops):
 
         results = asyncio.Queue()
 
-        for operation in operations_generator():
-            loop.create_task(operation).add_done_callback(results.put_nowait)
+        for future, operation in operations_generator():
+            future.add_done_callback(lambda _: results.put_nowait(operation))
 
         async def waiter():
             nonlocal total, results
             count = 0
 
             while count < total:
-                await results.get()
+                op = await results.get()
+                assert op.get_value(), "Null value %r" % op.get_value()
+
                 count += 1
 
         await waiter()
@@ -87,19 +90,16 @@ async def main():
 
     with open(result_file, "w") as res_fp:
         results = csv.writer(
-            res_fp, delimiter=',',
-            quotechar='"', quoting=csv.QUOTE_MINIMAL
+            res_fp, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL
         )
 
-        results.writerow([
-            "nr", "ops/s", "total", "nops", "chunk_size"
-        ])
+        results.writerow(["nr", "ops/s", "total", "nops", "chunk_size"])
 
         gen = chain(
-            range(2 ** 15, 1024, -32),
-            range(1024, 128, -4),
-            range(128, 16, -2),
-            range(16, 2, -1)
+            range(2 ** 15, 1024, -2048),
+            # range(1024, 128, -4),
+            range(128, 16, -16),
+            range(16, 2, -1),
         )
 
         for chunk_size in gen:
@@ -112,7 +112,8 @@ async def main():
             ops_sec = nops / total
 
             print(
-                "%4d %8d %8d %8d %8d" % (
+                "%4d %8d %8d %8d %8d"
+                % (
                     context_max_requests,
                     ops_sec,
                     total * 1000000,
@@ -121,9 +122,9 @@ async def main():
                 )
             )
 
-            results.writerow([
-                context_max_requests, ops_sec, total, nops, chunk_size
-            ])
+            results.writerow(
+                [context_max_requests, ops_sec, total, nops, chunk_size]
+            )
 
         await context.close()
 

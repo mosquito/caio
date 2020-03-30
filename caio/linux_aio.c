@@ -367,9 +367,7 @@ AIOOperation_dealloc(AIOOperation *self) {
         self->buffer = NULL;
     }
 
-    Py_XDECREF(self->py_buffer);
     Py_CLEAR(self->py_buffer);
-
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
@@ -464,9 +462,6 @@ static PyObject* AIOOperation_read(
     self->iocb.aio_buf = (uint64_t) self->buffer;
     self->iocb.aio_nbytes = nbytes;
     self->py_buffer = PyMemoryView_FromMemory(self->buffer, nbytes, PyBUF_READ);
-
-    Py_INCREF(self->py_buffer);
-
     self->iocb.aio_lio_opcode = IOCB_CMD_PREAD;
 
 	return (PyObject*) self;

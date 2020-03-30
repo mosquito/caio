@@ -9,7 +9,7 @@ from caio.python_aio_asyncio import AsyncioContext
 loop = asyncio.get_event_loop()
 
 
-chunk_size = 512 # 1024
+chunk_size = 512  # 1024
 context_max_requests = 16
 
 
