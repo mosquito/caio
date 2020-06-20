@@ -17,6 +17,7 @@ else:
 __all__ = (
     "Context",
     "Operation",
+    "AsyncioContext",
     "__version__",
     "__author__",
 )

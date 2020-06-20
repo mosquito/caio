@@ -49,6 +49,7 @@ typedef struct {
     PyObject* py_buffer;
     PyObject* callback;
     char* buffer;
+    int error;
     struct iocb iocb;
 } AIOOperation;
 
@@ -642,6 +643,16 @@ PyDoc_STRVAR(AIOOperation_get_value_docstring,
 static PyObject* AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
 ) {
+
+    if (self->error != 0) {
+        PyErr_SetString(
+            PyExc_SystemError,
+            strerror(self->error)
+        );
+
+        return NULL;
+    }
+
     switch (self->iocb.aio_lio_opcode) {
         case IOCB_CMD_PREAD:
             return PyBytes_FromStringAndSize(
@@ -649,15 +660,15 @@ static PyObject* AIOOperation_get_value(
             );
 
         case IOCB_CMD_PWRITE:
-            return self->py_buffer;
+            return PyLong_FromSsize_t(self->iocb.aio_nbytes);
     }
 
-    return NULL;
+    return Py_None;
 }
 
 
 /*
-    AIOOperation.get_value method definition
+    AIOOperation.set_callback method definition
 */
 PyDoc_STRVAR(AIOOperation_set_callback_docstring,
     "Set callback which will be called after Operation will be finished.\n\n"

@@ -74,4 +74,11 @@ setup(
         "Programming Language :: Python :: Implementation :: CPython",
     ],
     python_requires=">=3.5.*, <4",
+    extras_require={
+        'develop': [
+            'aiomisc',
+            'pytest',
+            'pytest-cov',
+        ],
+    },
 )

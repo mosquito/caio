@@ -1,10 +1,12 @@
 import os
-from contextlib import suppress
 from enum import IntEnum, unique
 from io import BytesIO
 from queue import Queue
 from typing import Optional, Callable, Any
 from threading import Thread
+
+
+fdsync = getattr(os, "fdatasync", os.fsync)
 
 
 class Context:
@@ -38,7 +40,7 @@ class Context:
 
     @staticmethod
     def _handle_fdsync(operation: "Operation"):
-        return os.fdatasync(operation.fileno)
+        return fdsync(operation.fileno)
 
     @staticmethod
     def _handle_noop(operation: "Operation"):
@@ -58,11 +60,14 @@ class Context:
             if operation is None:
                 return
 
-            with suppress(Exception):
+            result = 0
+            try:
                 result = op_map[operation.opcode](operation)
+            except Exception as e:
+                operation.exception = e
 
-                if operation.callback is not None:
-                    operation.callback(result)
+            if operation.callback is not None:
+                operation.callback(result)
 
     @property
     def max_requests(self) -> int:
@@ -129,6 +134,7 @@ class Operation:
         self.__opcode = opcode
         self.__nbytes = nbytes
         self.__priority = priority
+        self.exception = None
 
     @classmethod
     def read(
@@ -175,6 +181,14 @@ class Operation:
         """
         Method returns a bytes value of AIOOperation's result or None.
         """
+        if self.exception:
+            raise self.exception
+
+        if self.opcode == OpCode.WRITE:
+            return self.__nbytes
+
+        if self.buffer is None:
+            return
         return self.buffer.getvalue()
 
     @property

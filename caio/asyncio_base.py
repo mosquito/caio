@@ -1,5 +1,6 @@
 import asyncio
 import abc
+import logging
 from typing import Awaitable
 from contextlib import suppress
 from functools import partial
@@ -25,64 +26,82 @@ class AsyncioContextBase(abc.ABC):
     def _destroy_context(self):
         pass
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
     async def close(self):
         self.runner_task.cancel()
+        self._destroy_context()
+        await asyncio.gather(
+            self.runner_task, return_exceptions=True
+        )
 
-        try:
-            await self.runner_task
-        except asyncio.CancelledError:
-            return
-        finally:
-            self._destroy_context()
-
-    def submit(self, op: OPERATION_CLASS):
+    async def submit(self, op: OPERATION_CLASS):
         if not isinstance(op, self.OPERATION_CLASS):
             raise ValueError("Operation object expected")
 
         future = self.loop.create_future()
         self.operations.put_nowait((op, future))
-
-        return future
+        await future
+        return op.get_value()
 
     def _on_done(self, future, result):
         """
         In general case impossible predict current thread and the thread
         of event loop. So have to use `call_soon_threadsave` the result setter.
         """
-        future.add_done_callback(lambda _: self.semaphore.release())
+        self.loop.call_soon_threadsafe(self.semaphore.release)
         self.loop.call_soon_threadsafe(future.set_result, True)
 
-    async def _run(self):
-        async def step():
-            requests = []
+    async def _submit_atempt(self):
+        requests = {}
 
-            op, future = await self.operations.get()
-            op.set_callback(partial(self._on_done, future))
-            requests.append(op)
+        op, future = await self.operations.get()
+        op.set_callback(partial(self._on_done, future))
+        requests[op] = future
+
+        await self.semaphore.acquire()
+
+        while not self.semaphore.locked():
+            try:
+                op, future = self.operations.get_nowait()
+                op.set_callback(partial(self._on_done, future))
+                requests[op] = future
+                self.operations.task_done()
+            except asyncio.QueueEmpty:
+                break
 
             await self.semaphore.acquire()
 
-            while not self.semaphore.locked():
+        try:
+            # Trying to send bulk
+            self.context.submit(*requests.keys())
+        except:
+            # Retry send one by one and handle errors
+            for request, future in requests.items():
+                if future.done():
+                    # Do not send twice
+                    continue
+
                 try:
-                    op, future = self.operations.get_nowait()
-                    op.set_callback(partial(self._on_done, future))
-                    requests.append(op)
-                    self.operations.task_done()
-                except asyncio.QueueEmpty:
-                    break
+                    self.context.submit(request)
+                except Exception as e:
+                    future.set_exception(e)
 
-                await self.semaphore.acquire()
-
-            self.context.submit(*requests)
-
+    async def _run(self):
         while True:
-            with suppress(Exception):
-                await step()
+            try:
+                await self._submit_atempt()
+            except asyncio.CancelledError:
+                raise
+            except:
+                logging.exception("Error when submitting Operations")
 
-    async def read(self, nbytes: int, fd: int, offset: int) -> bytes:
-        op = self.OPERATION_CLASS.read(nbytes, fd, offset)
-        await self.submit(op)
-        return op.get_value()
+    def read(self, nbytes: int, fd: int, offset: int) -> Awaitable[bytes]:
+        return self.submit(self.OPERATION_CLASS.read(nbytes, fd, offset))
 
     def write(self, payload: bytes, fd: int, offset: int) -> Awaitable[int]:
         return self.submit(self.OPERATION_CLASS.write(payload, fd, offset))

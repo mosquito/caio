@@ -29,7 +29,8 @@ typedef struct {
     unsigned int fileno;
     unsigned int offset;
     int result;
-    int error;
+    uint8_t error;
+    uint8_t in_progress;
     Py_ssize_t buf_size;
     char* buf;
     void* ctx;
@@ -173,7 +174,6 @@ void worker(void *arg) {
             break;
     }
 
-    state = PyGILState_Ensure();
     op->result = result;
     op->error = errno;
 
@@ -181,6 +181,7 @@ void worker(void *arg) {
         op->buf_size = result;
     }
 
+    state = PyGILState_Ensure();
     if (op->callback != NULL) {
         PyObject_CallFunction(op->callback, "i", result);
     }
@@ -277,16 +278,21 @@ static PyObject* AIOContext_submit(
     }
 
     unsigned int i=0;
+    unsigned int j=0;
     int result = 0;
 
     for (; i < nr; i++) {
+        if (ops[i]->in_progress) continue;
+        ops[i]->error = 0;
+        ops[i]->in_progress = 1;
         result = threadpool_add(self->pool, worker, (void*) ops[i], 0);
         if (process_pool_error(result) < 0) return NULL;
         Py_INCREF(ops[i]);
         Py_INCREF(self);
+        j++;
     }
 
-    return (PyObject*) PyLong_FromSsize_t(i);
+    return (PyObject*) PyLong_FromSsize_t(j);
 }
 
 
@@ -341,13 +347,12 @@ static void
 AIOOperation_dealloc(AIOOperation *self) {
     Py_CLEAR(self->callback);
 
-    if (self->opcode == THAIO_READ && self->buf != NULL) {
+    if ((self->opcode == THAIO_READ || self->opcode == THAIO_WRITE) && self->buf != NULL) {
         PyMem_Free(self->buf);
         self->buf = NULL;
     }
 
     Py_CLEAR(self->py_buffer);
-
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
@@ -412,6 +417,7 @@ static PyObject* AIOOperation_read(
 
     self->buf = NULL;
     self->py_buffer = NULL;
+    self->in_progress = 0;
 
     uint64_t nbytes = 0;
     uint16_t priority;
@@ -437,7 +443,12 @@ static PyObject* AIOOperation_read(
 
     self->buf = PyMem_Calloc(nbytes, sizeof(char));
     self->buf_size = nbytes;
-    self->py_buffer = PyMemoryView_FromMemory(self->buf, nbytes, PyBUF_READ);
+
+    self->py_buffer = PyMemoryView_FromMemory(
+        self->buf,
+        self->buf_size,
+        PyBUF_READ
+    );
 
     self->opcode = THAIO_READ;
 
@@ -474,6 +485,7 @@ static PyObject* AIOOperation_write(
 
     self->buf = NULL;
     self->py_buffer = NULL;
+    self->in_progress = 0;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "OI|LH", kwlist,
@@ -494,13 +506,12 @@ static PyObject* AIOOperation_write(
         return NULL;
     }
 
-    Py_INCREF(self->py_buffer);
-
     self->opcode = THAIO_WRITE;
 
+    char* py_str_buf;
     if (PyBytes_AsStringAndSize(
             self->py_buffer,
-            &self->buf,
+            &py_str_buf,
             &self->buf_size
     )) {
         Py_XDECREF(self);
@@ -510,6 +521,10 @@ static PyObject* AIOOperation_write(
         );
         return NULL;
     }
+
+    self->buf = PyMem_Calloc(sizeof(char), self->buf_size + 1);
+    memcpy(self->buf, py_str_buf, self->buf_size);
+    self->py_buffer = NULL;
 
 	return (PyObject*) self;
 }
@@ -543,6 +558,7 @@ static PyObject* AIOOperation_fsync(
 
     self->buf = NULL;
     self->py_buffer = NULL;
+    self->in_progress = 0;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "I|H", kwlist,
@@ -582,6 +598,7 @@ static PyObject* AIOOperation_fdsync(
 
     self->buf = NULL;
     self->py_buffer = NULL;
+    self->in_progress = 0;
     uint16_t priority;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
@@ -608,6 +625,15 @@ PyDoc_STRVAR(AIOOperation_get_value_docstring,
 static PyObject* AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
 ) {
+    if (self->error != 0) {
+        PyErr_SetString(
+            PyExc_SystemError,
+            strerror(self->error)
+        );
+
+        return NULL;
+    }
+
     switch (self->opcode) {
         case THAIO_READ:
             return PyBytes_FromStringAndSize(
@@ -615,10 +641,10 @@ static PyObject* AIOOperation_get_value(
             );
 
         case THAIO_WRITE:
-            return self->py_buffer;
+            return PyLong_FromSsize_t(self->result);
     }
 
-    return NULL;
+    return Py_None;
 }
 
 
