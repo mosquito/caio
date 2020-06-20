@@ -1,5 +1,5 @@
 import asyncio
-from caio import AsyncioAIOContext
+from caio import AsyncioContext
 
 
 loop = asyncio.get_event_loop()
@@ -7,7 +7,7 @@ loop = asyncio.get_event_loop()
 
 async def main():
     # max_requests=128 by default
-    ctx = AsyncioAIOContext(max_requests=128)
+    ctx = AsyncioContext(max_requests=128)
 
     with open("test.file", "wb+") as fp:
         fd = fp.fileno()

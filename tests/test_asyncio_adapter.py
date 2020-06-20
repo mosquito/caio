@@ -1,35 +1,25 @@
 import asyncio
-import os
+import hashlib
+
+import aiomisc
 
 import pytest
 
-from caio import AsyncioAIOContext
 
-
-def test_context():
-    assert AsyncioAIOContext()
-
-    with pytest.raises(SystemError):
-        assert AsyncioAIOContext(-1)
-
-    with pytest.raises(SystemError):
-        assert AsyncioAIOContext(65534)
-
-
-def test_adapter(tmp_path):
-    loop = asyncio.get_event_loop()
-
-    async def run():
-        context = AsyncioAIOContext()
-        with open(os.path.join(tmp_path, "temp.bin"), "wb+") as fp:
+@aiomisc.timeout(5)
+async def test_adapter(tmp_path, async_context_maker):
+    async with async_context_maker() as context:
+        with open(str(tmp_path / "temp.bin"), "wb+") as fp:
             fd = fp.fileno()
 
             assert await context.read(32, fd, 0) == b""
-            assert await context.write(b"Hello world", fd, 0)
-            assert await context.read(32, fd, 0) == b"Hello world"
+            s = b"Hello world"
+            assert await context.write(s, fd, 0) == len(s)
+            assert await context.read(32, fd, 0) == s
 
-            assert await context.write(b"Hello world", fd, 0)
-            assert await context.read(32, fd, 0) == b"Hello world"
+            s = b"Hello real world"
+            assert await context.write(s, fd, 0) == len(s)
+            assert await context.read(32, fd, 0) == s
 
             part = b"\x00\x01\x02\x03"
 
@@ -39,20 +29,22 @@ def test_adapter(tmp_path):
 
             await context.fdsync(fd)
 
-            assert await context.read(1024 * len(part), fd, 0) == part * 1024
+            data = await context.read(1024 * len(part), fd, 0) == part * 1024
+            assert data
 
-    loop.run_until_complete(asyncio.wait_for(run(), 5))
+            expected_hash = '93b885adfe0da089cdf634904fd59f71'
+            assert hashlib.md5(bytes(data)).hexdigest() == expected_hash
 
 
-def test_bad_file_descritor(tmp_path):
-    loop = asyncio.get_event_loop()
 
-    async def run():
-        context = AsyncioAIOContext()
-        with open(os.path.join(tmp_path, "temp.bin"), "wb+") as fp:
+@aiomisc.timeout(3)
+async def test_bad_file_descritor(tmp_path, async_context_maker):
+    async with async_context_maker() as context:
+        with open(str(tmp_path / "temp.bin"), "wb+") as fp:
             fd = fp.fileno()
 
-        with pytest.raises(SystemError):
-            assert await context.read(32, fd, 0) == b""
+        with pytest.raises((SystemError, OSError)):
+            assert await context.read(1, fd, 0) == b""
 
-    loop.run_until_complete(asyncio.wait_for(run(), 5))
+        with pytest.raises((SystemError, OSError)):
+            assert await context.write(b"hello", fd, 0)
