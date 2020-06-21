@@ -12,6 +12,7 @@
 static const unsigned CTX_POOL_SIZE_DEFAULT = 8;
 static const unsigned CTX_MAX_REQUESTS_DEFAULT = 512;
 
+static PyTypeObject AIOOperationType;
 
 typedef struct {
     PyObject_HEAD
@@ -758,23 +759,6 @@ static PyMethodDef AIOOperation_methods[] = {
     {NULL}  /* Sentinel */
 };
 
-/*
-    AIOOperation class
-*/
-static PyTypeObject
-AIOOperationType = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "aio.AIOOperation",
-    .tp_doc = "thread aio operation representation",
-    .tp_basicsize = sizeof(AIOOperation),
-    .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_dealloc = (destructor) AIOOperation_dealloc,
-    .tp_members = AIOOperation_members,
-    .tp_methods = AIOOperation_methods,
-    .tp_repr = (reprfunc) AIOOperation_repr
-};
-
 
 static PyModuleDef thread_aio_module = {
     PyModuleDef_HEAD_INIT,
@@ -785,6 +769,23 @@ static PyModuleDef thread_aio_module = {
 
 
 PyMODINIT_FUNC PyInit_thread_aio(void) {
+
+    /*
+        AIOOperation class
+    */
+    AIOOperationType = {
+        PyVarObject_HEAD_INIT(NULL, 0)
+        .tp_name = "aio.AIOOperation",
+        .tp_doc = "thread aio operation representation",
+        .tp_basicsize = sizeof(AIOOperation),
+        .tp_itemsize = 0,
+        .tp_flags = Py_TPFLAGS_DEFAULT,
+        .tp_dealloc = (destructor) AIOOperation_dealloc,
+        .tp_members = AIOOperation_members,
+        .tp_methods = AIOOperation_methods,
+        .tp_repr = (reprfunc) AIOOperation_repr
+    };
+
     AIOContextTypeP = &AIOContextType;
     AIOOperationTypeP = &AIOOperationType;
 
