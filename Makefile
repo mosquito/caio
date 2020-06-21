@@ -9,10 +9,3 @@ mac_wheel:
 	python3.7 setup.py bdist_wheel
 	python3.8 setup.py bdist_wheel
 
-linux_wheel:
-	docker run -it --rm \
-		-v `pwd`:/app/src:ro \
-		-v `pwd`/dist:/app/dst \
-		--entrypoint /bin/bash \
-		quay.io/pypa/manylinux2010_x86_64 \
-		/app/src/scripts/make-wheels.sh

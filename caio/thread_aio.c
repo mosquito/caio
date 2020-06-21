@@ -284,11 +284,10 @@ static PyObject* AIOContext_submit(
         ops[i]->ctx = (void*) self;
     }
 
-    unsigned int i=0;
     unsigned int j=0;
     int result = 0;
 
-    for (; i < nr; i++) {
+    for (unsigned int i=0; i < nr; i++) {
         if (ops[i]->in_progress) continue;
         ops[i]->in_progress = 1;
         Py_INCREF(ops[i]);
