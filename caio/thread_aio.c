@@ -9,7 +9,7 @@
 #include "src/threadpool/threadpool.h"
 
 
-static const unsigned CTX_POOL_SIZE_DEFAULT = 4;
+static const unsigned CTX_POOL_SIZE_DEFAULT = 8;
 static const unsigned CTX_MAX_REQUESTS_DEFAULT = 512;
 
 
