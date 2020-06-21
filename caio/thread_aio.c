@@ -186,8 +186,8 @@ void worker(void *arg) {
         PyObject_CallFunction(op->callback, "i", result);
     }
 
-    Py_XDECREF(op);
-    Py_XDECREF((PyObject*) op->ctx);
+    Py_DECREF(op);
+    Py_DECREF((PyObject*) op->ctx);
 
     op->ctx = NULL;
 
@@ -285,10 +285,10 @@ static PyObject* AIOContext_submit(
         if (ops[i]->in_progress) continue;
         ops[i]->error = 0;
         ops[i]->in_progress = 1;
+        Py_INCREF(self);
+        Py_INCREF(ops[i]);
         result = threadpool_add(self->pool, worker, (void*) ops[i], 0);
         if (process_pool_error(result) < 0) return NULL;
-        Py_INCREF(ops[i]);
-        Py_INCREF(self);
         j++;
     }
 

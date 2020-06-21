@@ -17,7 +17,6 @@ class AsyncioContext(AsyncioContextBase):
         Cause process_events running in the same thread
         """
         future.set_result(True)
-        self.semaphore.release()
 
     def _destroy_context(self):
         self.loop.remove_reader(self.context.fileno)
