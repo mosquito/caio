@@ -1,8 +1,8 @@
+import hashlib
 import os
+from multiprocessing.pool import ThreadPool
 
 import tqdm
-import hashlib
-from multiprocessing.pool import ThreadPool
 
 
 POOL = ThreadPool(32)
@@ -23,7 +23,7 @@ def main():
     files = 128
 
     iterator = tqdm.tqdm(
-        POOL.imap_unordered(gen_data, range(files)), total=files
+        POOL.imap_unordered(gen_data, range(files)), total=files,
     )
 
     for _ in iterator:

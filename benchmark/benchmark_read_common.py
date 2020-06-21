@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 from functools import lru_cache
+
 from caio.asyncio_base import AsyncioContextBase
 
 
@@ -79,7 +80,7 @@ async def main(context_maker):
                 total,
                 nops,
                 chunk_size,
-            )
+            ),
         )
 
         context.close()

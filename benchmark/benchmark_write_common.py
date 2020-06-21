@@ -21,12 +21,12 @@ async def main(context_maker: typing.Type[AsyncioContextBase]):
                 futures = []
                 for i in range(1, 2 ** 15):
                     futures.append(
-                        context.write(data, fileno, offset * i * len(data))
+                        context.write(data, fileno, offset * i * len(data)),
                     )
 
                 await asyncio.gather(*futures)
                 timer += time.monotonic()
-                print('Done', timer)
+                print("Done", timer)
 
                 return timer
 
