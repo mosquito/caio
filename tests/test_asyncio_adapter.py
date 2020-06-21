@@ -36,7 +36,6 @@ async def test_adapter(tmp_path, async_context_maker):
             assert hashlib.md5(bytes(data)).hexdigest() == expected_hash
 
 
-
 @aiomisc.timeout(3)
 async def test_bad_file_descritor(tmp_path, async_context_maker):
     async with async_context_maker() as context:
