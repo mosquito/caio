@@ -10,7 +10,7 @@ from caio.asyncio_base import AsyncioContextBase
 data = os.urandom(65534)
 
 
-def main(context_maker: typing.Type[AsyncioContextBase]):
+async def main(context_maker: typing.Type[AsyncioContextBase]):
     async with context_maker() as context:
         with NamedTemporaryFile(mode="wb+") as fp:
 
