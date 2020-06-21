@@ -14,7 +14,7 @@ async def main(context_maker: typing.Type[AsyncioContextBase]):
     async with context_maker() as context:
         with NamedTemporaryFile(mode="wb+") as fp:
 
-            async def writer(offset = 0):
+            async def writer(offset=0):
                 timer = - time.monotonic()
                 fileno = fp.file.fileno()
 
