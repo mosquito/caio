@@ -5,12 +5,12 @@ from queue import Queue
 from typing import Optional, Callable, Any, Union
 from threading import Thread
 
-from .abstract import OperationBase, ContextBase
+from .abstract import AbstractOperation, AbstractContext
 
 fdsync = getattr(os, "fdatasync", os.fsync)
 
 
-class Context(ContextBase):
+class Context(AbstractContext):
     def __init__(self, max_requests: int = 32, pool_size: int = 8):
         assert max_requests < 65535 or max_requests is None
         assert pool_size < 128
@@ -114,7 +114,7 @@ class OpCode(IntEnum):
 
 
 # noinspection PyPropertyDefinition
-class Operation(OperationBase):
+class Operation(AbstractOperation):
     def __init__(
         self,
         fd: int,

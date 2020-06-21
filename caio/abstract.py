@@ -2,7 +2,7 @@ import abc
 from typing import Optional, Union, Callable, Any
 
 
-class ContextBase(abc.ABC):
+class AbstractContext(abc.ABC):
     @abc.abstractproperty
     def max_requests(self) -> int:
         raise NotImplementedError
@@ -12,10 +12,10 @@ class ContextBase(abc.ABC):
         raise NotImplementedError(aio_operations)
 
 
-class OperationBase(abc.ABC):
+class AbstractOperation(abc.ABC):
     @abc.abstractclassmethod
     def read(cls, nbytes: int, fd: int,
-             offset: int, priority=0) -> "OperationBase":
+             offset: int, priority=0) -> "AbstractOperation":
         """
         Creates a new instance of AIOOperation on read mode.
         """
@@ -23,21 +23,21 @@ class OperationBase(abc.ABC):
     @abc.abstractclassmethod
     def write(
         cls, payload_bytes: bytes,
-        fd: int, offset: int, priority=0) -> "OperationBase":
+        fd: int, offset: int, priority=0) -> "AbstractOperation":
         """
         Creates a new instance of AIOOperation on write mode.
         """
         raise NotImplementedError
 
     @abc.abstractclassmethod
-    def fsync(cls, fd: int, priority=0) -> "OperationBase":
+    def fsync(cls, fd: int, priority=0) -> "AbstractOperation":
         """
         Creates a new instance of AIOOperation on fsync mode.
         """
         raise NotImplementedError
 
     @abc.abstractclassmethod
-    def fdsync(cls, fd: int, priority=0) -> "OperationBase":
+    def fdsync(cls, fd: int, priority=0) -> "AbstractOperation":
 
         """
         Creates a new instance of AIOOperation on fdsync mode.
