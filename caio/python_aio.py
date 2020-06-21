@@ -2,19 +2,20 @@ import os
 from enum import IntEnum, unique
 from io import BytesIO
 from queue import Queue
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Union
 from threading import Thread
 
+from .abstract import OperationBase, ContextBase
 
 fdsync = getattr(os, "fdatasync", os.fsync)
 
 
-class Context:
+class Context(ContextBase):
     def __init__(self, max_requests: int = 32, pool_size: int = 8):
         assert max_requests < 65535 or max_requests is None
         assert pool_size < 128
 
-        self.queue = Queue(max_requests)
+        self.queue = Queue(max_requests)    # type: Queue
         self.pool = set()
         for _ in range(pool_size):
             thread = Thread(target=self._in_thread)
@@ -25,7 +26,11 @@ class Context:
     @staticmethod
     def _handle_read(operation: "Operation"):
         return operation.buffer.write(
-            os.pread(operation.fileno, operation.nbytes, operation.offset)
+            os.pread(
+                operation.fileno,
+                operation.nbytes,
+                operation.offset,
+            )
         )
 
     @staticmethod
@@ -109,7 +114,7 @@ class OpCode(IntEnum):
 
 
 # noinspection PyPropertyDefinition
-class Operation:
+class Operation(OperationBase):
     def __init__(
         self,
         fd: int,
@@ -119,21 +124,18 @@ class Operation:
         payload: bytes = None,
         priority: int = None,
     ):
-        self.callback = None
-        self.buffer = None
+        self.callback = None    # type: Optional[Callable[[int], Any]]
+        self.buffer = BytesIO()
 
-        if opcode == OpCode.READ:
-            self.buffer = BytesIO()
-
-        if opcode == OpCode.WRITE:
+        if opcode == OpCode.WRITE and payload:
             self.buffer = BytesIO(payload)
 
         self.opcode = opcode
         self.__fileno = fd
-        self.__offset = offset
+        self.__offset = offset or 0
         self.__opcode = opcode
-        self.__nbytes = nbytes
-        self.__priority = priority
+        self.__nbytes = nbytes or 0
+        self.__priority = priority or 0
         self.exception = None
 
     @classmethod
@@ -177,7 +179,7 @@ class Operation:
         """
         return cls(fd, None, None, opcode=OpCode.FDSYNC, priority=priority)
 
-    def get_value(self) -> Optional[bytes]:
+    def get_value(self) -> Union[bytes, int]:
         """
         Method returns a bytes value of AIOOperation's result or None.
         """
@@ -189,6 +191,7 @@ class Operation:
 
         if self.buffer is None:
             return
+
         return self.buffer.getvalue()
 
     @property

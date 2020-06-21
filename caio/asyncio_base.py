@@ -1,14 +1,34 @@
 import asyncio
 import abc
-from collections import deque
-from typing import Awaitable
+from typing import Type, Awaitable, Union
 from functools import partial
+
+
+from . import python_aio
+
+
+ContextType = Union[python_aio.Context]
+OperationType = Union[python_aio.Operation]
+
+try:
+    from . import linux_aio
+    ContextType = Union[linux_aio.Context, ContextType]
+    OperationType = Union[linux_aio.Operation, OperationType]
+except ImportError:
+    linux_aio = None
+
+try:
+    from . import thread_aio
+    ContextType = Union[thread_aio.Context, ContextType]
+    OperationType = Union[thread_aio.Operation, OperationType]
+except ImportError:
+    thread_aio = None
 
 
 class AsyncioContextBase(abc.ABC):
     MAX_REQUESTS_DEFAULT = 512
-    CONTEXT_CLASS = None
-    OPERATION_CLASS = None
+    CONTEXT_CLASS = None    # type: typing.Type[ContextType]
+    OPERATION_CLASS = None  # type: typing.Type[OperationType]
 
     def __init__(self, max_requests=None, loop=None, **kwargs):
         self.loop = loop or asyncio.get_event_loop()
@@ -70,7 +90,7 @@ class AsyncioContextBase(abc.ABC):
             self._runner_task.cancel()
         self._destroy_context()
 
-    async def submit(self, op: OPERATION_CLASS):
+    async def submit(self, op: AnyType):
         if not isinstance(op, self.OPERATION_CLASS):
             raise ValueError("Operation object expected")
 
