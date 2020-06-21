@@ -33,7 +33,7 @@ typedef struct {
     uint8_t in_progress;
     Py_ssize_t buf_size;
     char* buf;
-    void* ctx;
+    PyObject* ctx;
 } AIOOperation;
 
 
@@ -143,11 +143,14 @@ void worker(void *arg) {
     PyGILState_STATE state;
 
     AIOOperation* op = arg;
+    PyObject* ctx = op->ctx;
+    op->ctx = NULL;
 
     if (op->opcode == THAIO_NOOP) {
         state = PyGILState_Ensure();
-        Py_XDECREF(op);
-        Py_XDECREF((PyObject*) op->ctx);
+        op->ctx = NULL;
+        Py_DECREF(ctx);
+        Py_DECREF(op);
         PyGILState_Release(state);
         return;
     }
@@ -174,22 +177,20 @@ void worker(void *arg) {
             break;
     }
 
+    op->ctx = NULL;
     op->result = result;
     op->error = errno;
 
     if (op->opcode == THAIO_READ) {
         op->buf_size = result;
     }
-
     state = PyGILState_Ensure();
     if (op->callback != NULL) {
         PyObject_CallFunction(op->callback, "i", result);
     }
 
+    Py_DECREF(ctx);
     Py_DECREF(op);
-    Py_DECREF((PyObject*) op->ctx);
-
-    op->ctx = NULL;
 
     PyGILState_Release(state);
 }
@@ -285,8 +286,8 @@ static PyObject* AIOContext_submit(
         if (ops[i]->in_progress) continue;
         ops[i]->error = 0;
         ops[i]->in_progress = 1;
-        Py_INCREF(self);
         Py_INCREF(ops[i]);
+        Py_INCREF(ops[i]->ctx);
         result = threadpool_add(self->pool, worker, (void*) ops[i], 0);
         if (process_pool_error(result) < 0) return NULL;
         j++;
