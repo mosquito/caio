@@ -23,7 +23,8 @@ class AbstractOperation(abc.ABC):
     @classmethod
     def write(
         cls, payload_bytes: bytes,
-        fd: int, offset: int, priority=0) -> "AbstractOperation":
+        fd: int, offset: int, priority=0
+    ) -> "AbstractOperation":
         """
         Creates a new instance of AIOOperation on write mode.
         """

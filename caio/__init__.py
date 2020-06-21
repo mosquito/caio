@@ -1,10 +1,8 @@
-from caio.version import *
-import platform
-
 from .abstract import AbstractContext, AbstractOperation
 
 from . import python_aio
 from . import python_aio_asyncio
+from .version import __author__, __version__
 
 
 try:
@@ -35,6 +33,12 @@ __all__ = (
     "AsyncioContext",
     "AbstractContext",
     "AbstractOperation",
+    "python_aio",
+    "python_aio_asyncio",
+    "linux_aio",
+    "linux_aio_asyncio",
+    "thread_aio",
+    "thread_aio_asyncio",
     "__version__",
     "__author__",
 )

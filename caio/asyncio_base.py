@@ -5,10 +5,14 @@ from functools import partial
 from . import abstract
 
 
+ContextType = typing.Type[abstract.AbstractContext]
+OperationType = typing.Type[abstract.AbstractOperation]
+
+
 class AsyncioContextBase(abc.ABC):
     MAX_REQUESTS_DEFAULT = 512
-    CONTEXT_CLASS = None    # type: typing.Type[abstract.AbstractContext]
-    OPERATION_CLASS = None  # type: typing.Type[abstract.AbstractOperation]
+    CONTEXT_CLASS = None    # type: ContextType
+    OPERATION_CLASS = None  # type: OperationType
 
     def __init__(self, max_requests=None, loop=None, **kwargs):
         self.loop = loop or asyncio.get_event_loop()
@@ -36,7 +40,7 @@ class AsyncioContextBase(abc.ABC):
             try:
                 # Fast call
                 self.context.submit(*operations.keys())
-            except:
+            except Exception:
                 # Fallback
                 for operation, future in operations.items():
                     try:
@@ -50,7 +54,7 @@ class AsyncioContextBase(abc.ABC):
                 step(operation, future)
             except asyncio.CancelledError:
                 raise
-            except:
+            except Exception:
                 continue
 
     def _create_context(self, max_requests, **kwargs):
