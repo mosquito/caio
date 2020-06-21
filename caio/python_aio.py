@@ -2,10 +2,11 @@ import os
 from enum import IntEnum, unique
 from io import BytesIO
 from queue import Queue
-from typing import Optional, Callable, Any, Union
 from threading import Thread
+from typing import Any, Callable, Optional, Union
 
-from .abstract import AbstractOperation, AbstractContext
+from .abstract import AbstractContext, AbstractOperation
+
 
 fdsync = getattr(os, "fdatasync", os.fsync)
 
@@ -30,13 +31,13 @@ class Context(AbstractContext):
                 operation.fileno,
                 operation.nbytes,
                 operation.offset,
-            )
+            ),
         )
 
     @staticmethod
     def _handle_write(operation: "Operation"):
         return os.pwrite(
-            operation.fileno, operation.buffer.getvalue(), operation.offset
+            operation.fileno, operation.buffer.getvalue(), operation.offset,
         )
 
     @staticmethod
@@ -140,7 +141,7 @@ class Operation(AbstractOperation):
 
     @classmethod
     def read(
-        cls, nbytes: int, fd: int, offset: int, priority=0
+        cls, nbytes: int, fd: int, offset: int, priority=0,
     ) -> "Operation":
         """
         Creates a new instance of Operation on read mode.
@@ -149,7 +150,7 @@ class Operation(AbstractOperation):
 
     @classmethod
     def write(
-        cls, payload_bytes: bytes, fd: int, offset: int, priority=0
+        cls, payload_bytes: bytes, fd: int, offset: int, priority=0,
     ) -> "Operation":
         """
         Creates a new instance of AIOOperation on write mode.

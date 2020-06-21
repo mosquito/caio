@@ -1,7 +1,5 @@
+from . import python_aio, python_aio_asyncio
 from .abstract import AbstractContext, AbstractOperation
-
-from . import python_aio
-from . import python_aio_asyncio
 from .version import __author__, __version__
 
 

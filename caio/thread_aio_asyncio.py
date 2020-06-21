@@ -1,5 +1,5 @@
-from .thread_aio import Context, Operation
 from .asyncio_base import AsyncioContextBase
+from .thread_aio import Context, Operation
 
 
 class AsyncioContext(AsyncioContextBase):

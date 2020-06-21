@@ -1,7 +1,8 @@
-import asyncio
 import abc
+import asyncio
 import typing
 from functools import partial
+
 from . import abstract
 
 
@@ -17,7 +18,7 @@ class AsyncioContextBase(abc.ABC):
     def __init__(self, max_requests=None, loop=None, **kwargs):
         self.loop = loop or asyncio.get_event_loop()
         self.semaphore = asyncio.BoundedSemaphore(
-            max_requests or self.MAX_REQUESTS_DEFAULT
+            max_requests or self.MAX_REQUESTS_DEFAULT,
         )
         self.context = self._create_context(
             max_requests or self.MAX_REQUESTS_DEFAULT, **kwargs
@@ -93,16 +94,20 @@ class AsyncioContextBase(abc.ABC):
         """
         self.loop.call_soon_threadsafe(future.set_result, True)
 
-    def read(self, nbytes: int, fd: int,
-             offset: int, priority: int = 0) -> typing.Awaitable[bytes]:
+    def read(
+        self, nbytes: int, fd: int,
+        offset: int, priority: int = 0,
+    ) -> typing.Awaitable[bytes]:
         return self.submit(
-            self.OPERATION_CLASS.read(nbytes, fd, offset, priority)
+            self.OPERATION_CLASS.read(nbytes, fd, offset, priority),
         )
 
-    def write(self, payload: bytes, fd: int,
-              offset: int, priority: int = 0) -> typing.Awaitable[int]:
+    def write(
+        self, payload: bytes, fd: int,
+        offset: int, priority: int = 0,
+    ) -> typing.Awaitable[int]:
         return self.submit(
-            self.OPERATION_CLASS.write(payload, fd, offset, priority)
+            self.OPERATION_CLASS.write(payload, fd, offset, priority),
         )
 
     def fsync(self, fd: int) -> typing.Awaitable:

@@ -1,12 +1,13 @@
 import os
 import platform
-from setuptools import Extension, setup
 from importlib.machinery import SourceFileLoader
+
+from setuptools import Extension, setup
 
 
 module_name = "caio"
 module = SourceFileLoader(
-    "version", os.path.join(module_name, "version.py")
+    "version", os.path.join(module_name, "version.py"),
 ).load_module()
 
 
@@ -50,11 +51,11 @@ setup(
             "{}/linux_aio.pyi".format(module_name),
             "{}/thread_aio.pyi".format(module_name),
             "py.typed",
-        ]
+        ],
     },
     project_urls={
-        'Documentation': 'https://github.com/mosquito/caio/',
-        'Source': 'https://github.com/mosquito/caio',
+        "Documentation": "https://github.com/mosquito/caio/",
+        "Source": "https://github.com/mosquito/caio",
     },
     packages=[module_name],
     classifiers=[
@@ -76,10 +77,10 @@ setup(
     ],
     python_requires=">=3.5.*, <4",
     extras_require={
-        'develop': [
-            'aiomisc',
-            'pytest',
-            'pytest-cov',
+        "develop": [
+            "aiomisc",
+            "pytest",
+            "pytest-cov",
         ],
     },
 )

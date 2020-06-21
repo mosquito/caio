@@ -1,5 +1,5 @@
 import abc
-from typing import Optional, Union, Callable, Any
+from typing import Any, Callable, Optional, Union
 
 
 class AbstractContext(abc.ABC):
@@ -13,8 +13,10 @@ class AbstractContext(abc.ABC):
 
 class AbstractOperation(abc.ABC):
     @classmethod
-    def read(cls, nbytes: int, fd: int,
-             offset: int, priority=0) -> "AbstractOperation":
+    def read(
+        cls, nbytes: int, fd: int,
+        offset: int, priority=0,
+    ) -> "AbstractOperation":
         """
         Creates a new instance of AIOOperation on read mode.
         """
@@ -23,7 +25,7 @@ class AbstractOperation(abc.ABC):
     @classmethod
     def write(
         cls, payload_bytes: bytes,
-        fd: int, offset: int, priority=0
+        fd: int, offset: int, priority=0,
     ) -> "AbstractOperation":
         """
         Creates a new instance of AIOOperation on write mode.

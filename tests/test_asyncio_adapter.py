@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 
 import aiomisc
-
 import pytest
 
 
@@ -32,7 +31,7 @@ async def test_adapter(tmp_path, async_context_maker):
             data = await context.read(1024 * len(part), fd, 0) == part * 1024
             assert data
 
-            expected_hash = '93b885adfe0da089cdf634904fd59f71'
+            expected_hash = "93b885adfe0da089cdf634904fd59f71"
             assert hashlib.md5(bytes(data)).hexdigest() == expected_hash
 
 

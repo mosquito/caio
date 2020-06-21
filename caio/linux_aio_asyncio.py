@@ -1,5 +1,5 @@
-from .linux_aio import Context, Operation
 from .asyncio_base import AsyncioContextBase
+from .linux_aio import Context, Operation
 
 
 class AsyncioContext(AsyncioContextBase):
