@@ -1,7 +1,7 @@
 import asyncio
 
 from caio.thread_aio_asyncio import AsyncioContext
-from benchmark_common import main
+from benchmark_read_common import main
 
 
 if __name__ == "__main__":
