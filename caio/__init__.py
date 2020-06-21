@@ -20,11 +20,11 @@ except ImportError:
     thread_aio_asyncio = None   # type: ignore
 
 
-prefered = list(filter(None, [linux_aio, thread_aio, python_aio]))[0]
+preferred = list(filter(None, [linux_aio, thread_aio, python_aio]))[0]
 
 
-Context = prefered.Context      # type: ignore
-Operation = prefered.Operation  # type: ignore
+Context = preferred.Context      # type: ignore
+Operation = preferred.Operation  # type: ignore
 
 
 __all__ = (
