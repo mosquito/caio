@@ -27,7 +27,7 @@ typedef struct {
     PyObject* callback;
     int opcode;
     unsigned int fileno;
-    unsigned int offset;
+    off_t offset;
     int result;
     uint8_t error;
     uint8_t in_progress;
@@ -191,7 +191,10 @@ void worker(void *arg) {
         PyObject_CallFunction(op->callback, "i", result);
     }
 
-    if (op->opcode == THAIO_WRITE) Py_XDECREF(op->py_buffer);
+    if (op->opcode == THAIO_WRITE) {
+        Py_DECREF(op->py_buffer);
+        op->py_buffer = NULL;
+    }
 
     Py_DECREF(ctx);
     Py_DECREF(op);

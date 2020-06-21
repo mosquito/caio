@@ -450,15 +450,6 @@ static PyObject* AIOOperation_read(
 
     if (!argIsOk) return NULL;
 
-//    if (nbytes == 0) {
-//        Py_XDECREF(self);
-//        PyErr_SetString(
-//            PyExc_ValueError,
-//            "nbytes must be grater then zero"
-//        );
-//        return NULL;
-//    }
-
     self->buffer = PyMem_Calloc(nbytes, sizeof(char));
     self->iocb.aio_buf = (uint64_t) self->buffer;
     self->iocb.aio_nbytes = nbytes;
