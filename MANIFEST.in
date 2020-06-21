@@ -1,2 +1,3 @@
 include caio/*.pyi
+include caio/py.typed
 include README.rst

@@ -49,6 +49,7 @@ setup(
         module_name: [
             "{}/linux_aio.pyi".format(module_name),
             "{}/thread_aio.pyi".format(module_name),
+            "py.typed",
         ]
     },
     project_urls={
