@@ -210,7 +210,7 @@ inline int process_pool_error(int code) {
             );
             return code;
         case threadpool_queue_full:
-            PyErr_SetString(
+            PyErr_Format(
                 PyExc_RuntimeError,
                 "Thread pool queue full"
             );
@@ -432,14 +432,14 @@ static PyObject* AIOOperation_read(
 
     if (!argIsOk) return NULL;
 
-    if (nbytes == 0) {
-        Py_XDECREF(self);
-        PyErr_SetString(
-            PyExc_ValueError,
-            "nbytes must be grater then zero"
-        );
-        return NULL;
-    }
+//    if (nbytes == 0) {
+//        Py_XDECREF(self);
+//        PyErr_SetString(
+//            PyExc_ValueError,
+//            "nbytes must be grater then zero"
+//        );
+//        return NULL;
+//    }
 
     self->buf = PyMem_Calloc(nbytes, sizeof(char));
     self->buf_size = nbytes;

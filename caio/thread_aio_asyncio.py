@@ -3,5 +3,6 @@ from .asyncio_base import AsyncioContextBase
 
 
 class AsyncioContext(AsyncioContextBase):
+    MAX_REQUESTS_DEFAULT = 512
     OPERATION_CLASS = Operation
     CONTEXT_CLASS = Context
