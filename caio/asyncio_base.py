@@ -1,5 +1,6 @@
 import asyncio
 import abc
+from collections import deque
 from typing import Awaitable
 from functools import partial
 
@@ -18,6 +19,40 @@ class AsyncioContextBase(abc.ABC):
             max_requests or self.MAX_REQUESTS_DEFAULT, **kwargs
         )
 
+        self.operations_queue = asyncio.Queue()
+        self._runner_task = self.loop.create_task(self._run())
+
+    async def _run(self):
+        def step(first_operation, first_future):
+            operations = {first_operation: first_future}
+
+            while True:
+                try:
+                    operation, future = self.operations_queue.get_nowait()
+                    operations[operation] = future
+                except asyncio.QueueEmpty:
+                    break
+
+            try:
+                # Fast call
+                self.context.submit(*operations.keys())
+            except:
+                # Fallback
+                for operation, future in operations.items():
+                    try:
+                        self.context.submit(operation)
+                    except Exception as e:
+                        future.set_exception(e)
+
+        while self.loop.is_running():
+            try:
+                operation, future = await self.operations_queue.get()
+                step(operation, future)
+            except asyncio.CancelledError:
+                raise
+            except:
+                continue
+
     def _create_context(self, max_requests, **kwargs):
         return self.CONTEXT_CLASS(max_requests=max_requests, **kwargs)
 
@@ -31,6 +66,8 @@ class AsyncioContextBase(abc.ABC):
         self.close()
 
     def close(self):
+        if not self.loop.is_closed():
+            self._runner_task.cancel()
         self._destroy_context()
 
     async def submit(self, op: OPERATION_CLASS):
@@ -41,7 +78,7 @@ class AsyncioContextBase(abc.ABC):
         op.set_callback(partial(self._on_done, future))
 
         async with self.semaphore:
-            self.context.submit(op)
+            await self.operations_queue.put((op, future))
             await future
             return op.get_value()
 

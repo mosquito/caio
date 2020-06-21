@@ -145,6 +145,7 @@ void worker(void *arg) {
     AIOOperation* op = arg;
     PyObject* ctx = op->ctx;
     op->ctx = NULL;
+    op->error = 0;
 
     if (op->opcode == THAIO_NOOP) {
         state = PyGILState_Ensure();
@@ -179,7 +180,8 @@ void worker(void *arg) {
 
     op->ctx = NULL;
     op->result = result;
-    op->error = errno;
+
+    if (result < 0) op->error = errno;
 
     if (op->opcode == THAIO_READ) {
         op->buf_size = result;
@@ -284,7 +286,6 @@ static PyObject* AIOContext_submit(
 
     for (; i < nr; i++) {
         if (ops[i]->in_progress) continue;
-        ops[i]->error = 0;
         ops[i]->in_progress = 1;
         Py_INCREF(ops[i]);
         Py_INCREF(ops[i]->ctx);
@@ -432,15 +433,6 @@ static PyObject* AIOOperation_read(
     );
 
     if (!argIsOk) return NULL;
-
-//    if (nbytes == 0) {
-//        Py_XDECREF(self);
-//        PyErr_SetString(
-//            PyExc_ValueError,
-//            "nbytes must be grater then zero"
-//        );
-//        return NULL;
-//    }
 
     self->buf = PyMem_Calloc(nbytes, sizeof(char));
     self->buf_size = nbytes;
