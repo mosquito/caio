@@ -12,7 +12,9 @@
 static const unsigned CTX_POOL_SIZE_DEFAULT = 8;
 static const unsigned CTX_MAX_REQUESTS_DEFAULT = 512;
 
+
 static PyTypeObject AIOOperationType;
+static PyTypeObject AIOContextType;
 
 typedef struct {
     PyObject_HEAD
@@ -45,10 +47,6 @@ enum THAIO_OP_CODE {
     THAIO_FDSYNC,
     THAIO_NOOP,
 };
-
-
-static PyTypeObject* AIOOperationTypeP = NULL;
-static PyTypeObject* AIOContextTypeP = NULL;
 
 
 static void
@@ -273,7 +271,7 @@ static PyObject* AIOContext_submit(
 
     for (unsigned int i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
-        if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
+        if (PyObject_TypeCheck(obj, &AIOOperationType) == 0) {
             PyErr_Format(
                 PyExc_TypeError,
                 "Wrong type for argument %d", i
@@ -759,6 +757,23 @@ static PyMethodDef AIOOperation_methods[] = {
     {NULL}  /* Sentinel */
 };
 
+/*
+    AIOOperation class
+*/
+static PyTypeObject
+AIOOperationType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "aio.AIOOperation",
+    .tp_doc = "thread aio operation representation",
+    .tp_basicsize = sizeof(AIOOperation),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_dealloc = (destructor) AIOOperation_dealloc,
+    .tp_members = AIOOperation_members,
+    .tp_methods = AIOOperation_methods,
+    .tp_repr = (reprfunc) AIOOperation_repr
+};
+
 
 static PyModuleDef thread_aio_module = {
     PyModuleDef_HEAD_INIT,
@@ -769,26 +784,6 @@ static PyModuleDef thread_aio_module = {
 
 
 PyMODINIT_FUNC PyInit_thread_aio(void) {
-
-    /*
-        AIOOperation class
-    */
-    AIOOperationType = {
-        PyVarObject_HEAD_INIT(NULL, 0)
-        .tp_name = "aio.AIOOperation",
-        .tp_doc = "thread aio operation representation",
-        .tp_basicsize = sizeof(AIOOperation),
-        .tp_itemsize = 0,
-        .tp_flags = Py_TPFLAGS_DEFAULT,
-        .tp_dealloc = (destructor) AIOOperation_dealloc,
-        .tp_members = AIOOperation_members,
-        .tp_methods = AIOOperation_methods,
-        .tp_repr = (reprfunc) AIOOperation_repr
-    };
-
-    AIOContextTypeP = &AIOContextType;
-    AIOOperationTypeP = &AIOOperationType;
-
     PyEval_InitThreads();
 
     PyObject *m;
@@ -797,22 +792,22 @@ PyMODINIT_FUNC PyInit_thread_aio(void) {
 
     if (m == NULL) return NULL;
 
-    if (PyType_Ready(AIOContextTypeP) < 0) return NULL;
+    if (PyType_Ready(&AIOContextType) < 0) return NULL;
 
-    Py_INCREF(AIOContextTypeP);
+    Py_INCREF(&AIOContextType);
 
-    if (PyModule_AddObject(m, "Context", (PyObject *) AIOContextTypeP) < 0) {
-        Py_XDECREF(AIOContextTypeP);
+    if (PyModule_AddObject(m, "Context", (PyObject *) &AIOContextType) < 0) {
+        Py_XDECREF(&AIOContextType);
         Py_XDECREF(m);
         return NULL;
     }
 
-    if (PyType_Ready(AIOOperationTypeP) < 0) return NULL;
+    if (PyType_Ready(&AIOOperationType) < 0) return NULL;
 
-    Py_INCREF(AIOOperationTypeP);
+    Py_INCREF(&AIOOperationType);
 
-    if (PyModule_AddObject(m, "Operation", (PyObject *) AIOOperationTypeP) < 0) {
-        Py_XDECREF(AIOOperationTypeP);
+    if (PyModule_AddObject(m, "Operation", (PyObject *) &AIOOperationType) < 0) {
+        Py_XDECREF(&AIOOperationType);
         Py_XDECREF(m);
         return NULL;
     }

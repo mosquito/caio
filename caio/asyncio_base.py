@@ -1,34 +1,14 @@
 import asyncio
 import abc
-from typing import Type, Awaitable, Union
+import typing
 from functools import partial
-
-
-from . import python_aio
-
-
-ContextType = Union[python_aio.Context]
-OperationType = Union[python_aio.Operation]
-
-try:
-    from . import linux_aio
-    ContextType = Union[linux_aio.Context, ContextType]
-    OperationType = Union[linux_aio.Operation, OperationType]
-except ImportError:
-    linux_aio = None
-
-try:
-    from . import thread_aio
-    ContextType = Union[thread_aio.Context, ContextType]
-    OperationType = Union[thread_aio.Operation, OperationType]
-except ImportError:
-    thread_aio = None
+from . import abstract
 
 
 class AsyncioContextBase(abc.ABC):
     MAX_REQUESTS_DEFAULT = 512
-    CONTEXT_CLASS = None    # type: typing.Type[ContextType]
-    OPERATION_CLASS = None  # type: typing.Type[OperationType]
+    CONTEXT_CLASS = None    # type: typing.Type[abstract.AbstractContext]
+    OPERATION_CLASS = None  # type: typing.Type[abstract.AbstractOperation]
 
     def __init__(self, max_requests=None, loop=None, **kwargs):
         self.loop = loop or asyncio.get_event_loop()
@@ -90,7 +70,7 @@ class AsyncioContextBase(abc.ABC):
             self._runner_task.cancel()
         self._destroy_context()
 
-    async def submit(self, op: AnyType):
+    async def submit(self, op):
         if not isinstance(op, self.OPERATION_CLASS):
             raise ValueError("Operation object expected")
 
@@ -109,14 +89,20 @@ class AsyncioContextBase(abc.ABC):
         """
         self.loop.call_soon_threadsafe(future.set_result, True)
 
-    def read(self, nbytes: int, fd: int, offset: int) -> Awaitable[bytes]:
-        return self.submit(self.OPERATION_CLASS.read(nbytes, fd, offset))
+    def read(self, nbytes: int, fd: int,
+             offset: int, priority: int = 0) -> typing.Awaitable[bytes]:
+        return self.submit(
+            self.OPERATION_CLASS.read(nbytes, fd, offset, priority)
+        )
 
-    def write(self, payload: bytes, fd: int, offset: int) -> Awaitable[int]:
-        return self.submit(self.OPERATION_CLASS.write(payload, fd, offset))
+    def write(self, payload: bytes, fd: int,
+              offset: int, priority: int = 0) -> typing.Awaitable[int]:
+        return self.submit(
+            self.OPERATION_CLASS.write(payload, fd, offset, priority)
+        )
 
-    def fsync(self, fd: int) -> Awaitable:
+    def fsync(self, fd: int) -> typing.Awaitable:
         return self.submit(self.OPERATION_CLASS.fsync(fd))
 
-    def fdsync(self, fd: int) -> Awaitable:
+    def fdsync(self, fd: int) -> typing.Awaitable:
         return self.submit(self.OPERATION_CLASS.fdsync(fd))

@@ -3,24 +3,24 @@ from typing import Optional, Union, Callable, Any
 
 
 class AbstractContext(abc.ABC):
-    @abc.abstractproperty
+    @property
     def max_requests(self) -> int:
         raise NotImplementedError
 
-    @abc.abstractmethod
     def submit(self, *aio_operations) -> int:
         raise NotImplementedError(aio_operations)
 
 
 class AbstractOperation(abc.ABC):
-    @abc.abstractclassmethod
+    @classmethod
     def read(cls, nbytes: int, fd: int,
              offset: int, priority=0) -> "AbstractOperation":
         """
         Creates a new instance of AIOOperation on read mode.
         """
+        raise NotImplementedError
 
-    @abc.abstractclassmethod
+    @classmethod
     def write(
         cls, payload_bytes: bytes,
         fd: int, offset: int, priority=0) -> "AbstractOperation":
@@ -29,14 +29,14 @@ class AbstractOperation(abc.ABC):
         """
         raise NotImplementedError
 
-    @abc.abstractclassmethod
+    @classmethod
     def fsync(cls, fd: int, priority=0) -> "AbstractOperation":
         """
         Creates a new instance of AIOOperation on fsync mode.
         """
         raise NotImplementedError
 
-    @abc.abstractclassmethod
+    @classmethod
     def fdsync(cls, fd: int, priority=0) -> "AbstractOperation":
 
         """
@@ -44,29 +44,23 @@ class AbstractOperation(abc.ABC):
         """
         raise NotImplementedError
 
-    @abc.abstractmethod
     def get_value(self) -> Union[bytes, int]:
         """
         Method returns a bytes value of AIOOperation's result or None.
         """
         raise NotImplementedError
 
-    @abc.abstractproperty
     def fileno(self) -> int:
         raise NotImplementedError
 
-    @abc.abstractproperty
     def offset(self) -> int:
         raise NotImplementedError
 
-    @abc.abstractproperty
     def payload(self) -> Optional[Union[bytes, memoryview]]:
         raise NotImplementedError
 
-    @abc.abstractproperty
     def nbytes(self) -> int:
         raise NotImplementedError
 
-    @abc.abstractmethod
     def set_callback(self, callback: Callable[[int], Any]) -> bool:
         raise NotImplementedError
