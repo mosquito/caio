@@ -18,7 +18,7 @@ async def main(context_maker: typing.Type[AsyncioContextBase]):
             fileno = fp.file.fileno()
 
             futures = []
-            for i in range(1, 1024):
+            for i in range(1, 2 ** 15):
                 futures.append(context.write(data, fileno, i * len(data)))
 
             await asyncio.gather(*futures)

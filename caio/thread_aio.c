@@ -191,6 +191,8 @@ void worker(void *arg) {
         PyObject_CallFunction(op->callback, "i", result);
     }
 
+    if (op->opcode == THAIO_WRITE) Py_XDECREF(op->py_buffer);
+
     Py_DECREF(ctx);
     Py_DECREF(op);
 
@@ -349,7 +351,7 @@ static void
 AIOOperation_dealloc(AIOOperation *self) {
     Py_CLEAR(self->callback);
 
-    if ((self->opcode == THAIO_READ || self->opcode == THAIO_WRITE) && self->buf != NULL) {
+    if ((self->opcode == THAIO_READ) && self->buf != NULL) {
         PyMem_Free(self->buf);
         self->buf = NULL;
     }
@@ -501,10 +503,9 @@ static PyObject* AIOOperation_write(
 
     self->opcode = THAIO_WRITE;
 
-    char* py_str_buf;
     if (PyBytes_AsStringAndSize(
             self->py_buffer,
-            &py_str_buf,
+            &self->buf,
             &self->buf_size
     )) {
         Py_XDECREF(self);
@@ -515,9 +516,12 @@ static PyObject* AIOOperation_write(
         return NULL;
     }
 
-    self->buf = PyMem_Calloc(sizeof(char), self->buf_size + 1);
-    memcpy(self->buf, py_str_buf, self->buf_size);
-    self->py_buffer = NULL;
+    Py_INCREF(self->py_buffer);
+    self->buf = py_str;
+
+//    self->buf = PyMem_Calloc(sizeof(char), self->buf_size + 1);
+//    memcpy(self->buf, py_str_buf, self->buf_size);
+//    self->py_buffer = NULL;
 
 	return (PyObject*) self;
 }
