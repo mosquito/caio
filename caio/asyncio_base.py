@@ -9,17 +9,17 @@ class AsyncioContextBase(abc.ABC):
     CONTEXT_CLASS = None
     OPERATION_CLASS = None
 
-    def __init__(self, max_requests=None, loop=None):
+    def __init__(self, max_requests=None, loop=None, **kwargs):
         self.loop = loop or asyncio.get_event_loop()
         self.semaphore = asyncio.BoundedSemaphore(
             max_requests or self.MAX_REQUESTS_DEFAULT
         )
         self.context = self._create_context(
-            max_requests or self.MAX_REQUESTS_DEFAULT
+            max_requests or self.MAX_REQUESTS_DEFAULT, **kwargs
         )
 
-    def _create_context(self, max_requests):
-        return self.CONTEXT_CLASS(max_requests=max_requests)
+    def _create_context(self, max_requests, **kwargs):
+        return self.CONTEXT_CLASS(max_requests=max_requests, **kwargs)
 
     def _destroy_context(self):
         return
