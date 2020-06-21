@@ -5,7 +5,7 @@ from functools import lru_cache
 from caio.asyncio_base import AsyncioContextBase
 
 
-chunk_size = 32  # 1024
+chunk_size = 16 * 1024  # 1024
 context_max_requests = 512
 
 
