@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+from functools import lru_cache
 
 from caio.thread_aio_asyncio import AsyncioContext
 
@@ -12,23 +13,26 @@ chunk_size = 512  # * 1024
 context_max_requests = 16
 
 
+@lru_cache
+def open_file_by_id(file_id):
+    fname = f"data/{file_id}.bin"
+    return open(fname, "rb"), os.stat(fname).st_size
+
+
 async def read_file(ctx: AsyncioContext, file_id):
     offset = 0
-    fname = f"data/{file_id}.bin"
-    file_size = os.stat(fname).st_size
 
-    with open(fname, "rb") as fp:
-        fd = fp.fileno()
+    fp, file_size = open_file_by_id(file_id)
+    fd = fp.fileno()
 
-        c = 0
-        futures = []
-        while offset < file_size:
-            futures.append(ctx.read(chunk_size, fd, offset))
-            offset += chunk_size
-            c += 1
+    c = 0
+    futures = []
+    while offset < file_size:
+        futures.append(ctx.read(chunk_size, fd, offset))
+        offset += chunk_size
+        c += 1
 
-        await asyncio.gather(*futures)
-
+    await asyncio.gather(*futures)
     return c
 
 
