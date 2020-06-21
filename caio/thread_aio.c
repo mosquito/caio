@@ -517,11 +517,6 @@ static PyObject* AIOOperation_write(
     }
 
     Py_INCREF(self->py_buffer);
-    self->buf = py_str;
-
-//    self->buf = PyMem_Calloc(sizeof(char), self->buf_size + 1);
-//    memcpy(self->buf, py_str_buf, self->buf_size);
-//    self->py_buffer = NULL;
 
 	return (PyObject*) self;
 }
