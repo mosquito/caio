@@ -126,7 +126,7 @@ async def main():
                 [context_max_requests, ops_sec, total, nops, chunk_size]
             )
 
-        await context.close()
+        context.close()
 
 
 if __name__ == "__main__":

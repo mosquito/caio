@@ -79,7 +79,7 @@ async def main():
             )
         )
 
-        await context.close()
+        context.close()
 
 
 if __name__ == "__main__":
