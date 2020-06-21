@@ -522,8 +522,6 @@ static PyObject* AIOOperation_write(
         return NULL;
     }
 
-    Py_INCREF(self->py_buffer);
-
     self->iocb.aio_lio_opcode = IOCB_CMD_PWRITE;
 
     if (PyBytes_AsStringAndSize(
@@ -538,6 +536,8 @@ static PyObject* AIOOperation_write(
         );
         return NULL;
     }
+
+    Py_INCREF(self->py_buffer);
 
     self->iocb.aio_nbytes = nbytes;
     self->iocb.aio_buf = (uint64_t) self->buffer;
