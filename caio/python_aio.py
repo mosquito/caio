@@ -1,38 +1,16 @@
 import os
+from collections import defaultdict
 from enum import IntEnum, unique
 from io import BytesIO
-from queue import Queue
-from threading import Thread
+from queue import Queue, Empty
+from threading import Thread, RLock
 from typing import Any, Callable, Optional, Union
 
 from .abstract import AbstractContext, AbstractOperation
 
 
 fdsync = getattr(os, "fdatasync", os.fsync)
-
-
-if hasattr(os, "pread"):
-    pread = os.pread
-else:
-    def pread(fd, size, offset):
-        fd = os.dup(fd)
-        os.lseek(fd, offset, os.SEEK_SET)
-        try:
-            return os.read(fd, size)
-        finally:
-            os.close(fd)
-
-
-if hasattr(os, "pwrite"):
-    pwrite = os.pwrite
-else:
-    def pwrite(fd, bytes, offset):
-        fd = os.dup(fd)
-        os.lseek(fd, offset, os.SEEK_SET)
-        try:
-            return os.write(fd, bytes)
-        finally:
-            os.close(fd)
+NATIVE_PREAD_PWRITE = hasattr(os, "pread") and hasattr(os, "pwrite")
 
 
 class Context(AbstractContext):
@@ -42,25 +20,53 @@ class Context(AbstractContext):
 
         self.queue = Queue(max_requests)    # type: Queue
         self.pool = set()
+
+        if not NATIVE_PREAD_PWRITE:
+            self._locks_cleaner = RLock()
+            self._locks = defaultdict(RLock)
+
         for _ in range(pool_size):
             thread = Thread(target=self._in_thread)
             thread.daemon = True
             self.pool.add(thread)
             thread.start()
 
-    @staticmethod
-    def _handle_read(operation: "Operation"):
+    if NATIVE_PREAD_PWRITE:
+        def __pread(self, fd, size, offset):
+            return os.pread(fd, size, offset)
+
+        def __pwrite(self, fd, bytes, offset):
+            return os.pwrite(fd, bytes, offset)
+    else:
+        def __pread(self, fd, size, offset):
+            with self._locks[fd]:
+                fd = os.dup(fd)
+                os.lseek(fd, offset, os.SEEK_SET)
+                try:
+                    return os.read(fd, size)
+                finally:
+                    os.close(fd)
+
+        def __pwrite(self, fd, bytes, offset):
+            with self._locks[fd]:
+                fd = os.dup(fd)
+                os.lseek(fd, offset, os.SEEK_SET)
+                try:
+                    return os.write(fd, bytes)
+                finally:
+                    os.close(fd)
+
+    def _handle_read(self, operation: "Operation"):
         return operation.buffer.write(
-            pread(
+            self.__pread(
                 operation.fileno,
                 operation.nbytes,
                 operation.offset,
             ),
         )
 
-    @staticmethod
-    def _handle_write(operation: "Operation"):
-        return pwrite(
+    def _handle_write(self, operation: "Operation"):
+        return self.__pwrite(
             operation.fileno, operation.buffer.getvalue(), operation.offset,
         )
 
@@ -85,7 +91,14 @@ class Context(AbstractContext):
             OpCode.NOOP: self._handle_noop,
         }
         while True:
-            operation = self.queue.get()
+            try:
+                operation = self.queue.get(timeout=0.5)
+            except Empty:
+                if not NATIVE_PREAD_PWRITE:
+                    with self._locks_cleaner:
+                        self._locks.clear()
+
+                continue
 
             if operation is None:
                 return
