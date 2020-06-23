@@ -58,13 +58,28 @@ jobs:
           args: tox
 
   tests-windows:
+    strategy:
+      fail-fast: false
+
+      matrix:
+        python-versions:
+          - 3.6
+          - 3.7
+          - 3.8
+
     needs: lint
     runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v2
 
-      - name: Creating a virtualenv
+      - name: Setting up python ${{ matrix.python-versions }}
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python-versions }}
+          architecture: x64
+
+      - name: Creating a virtualenv python ${{ matrix.python-versions }}
         run: python -m venv .env
         shell: cmd
 
