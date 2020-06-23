@@ -56,3 +56,22 @@ jobs:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
         with:
           args: tox
+
+  tests-windows:
+    needs: lint
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Creating a virtualenv
+        run: python -m venv .env
+        shell: cmd
+
+      - name: Installing project
+        run: .env\Scripts\pip.exe install -Ue ".[develop]"
+        shell: cmd
+
+      - name: Running tests
+        run: .env\Scripts\pytest.exe -v tests
+        shell: cmd
