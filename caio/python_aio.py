@@ -11,6 +11,30 @@ from .abstract import AbstractContext, AbstractOperation
 fdsync = getattr(os, "fdatasync", os.fsync)
 
 
+if hasattr(os, "pread"):
+    pread = os.pread
+else:
+    def pread(fd, size, offset):
+        fd = os.dup(fd)
+        os.lseek(fd, offset, os.SEEK_SET)
+        try:
+            return os.read(fd, size)
+        finally:
+            os.close(fd)
+
+
+if hasattr(os, "pwrite"):
+    pwrite = os.pwrite
+else:
+    def pwrite(fd, bytes, offset):
+        fd = os.dup(fd)
+        os.lseek(fd, offset, os.SEEK_SET)
+        try:
+            return os.write(fd, bytes)
+        finally:
+            os.close(fd)
+
+
 class Context(AbstractContext):
     def __init__(self, max_requests: int = 32, pool_size: int = 8):
         assert max_requests < 65535 or max_requests is None
@@ -27,7 +51,7 @@ class Context(AbstractContext):
     @staticmethod
     def _handle_read(operation: "Operation"):
         return operation.buffer.write(
-            os.pread(
+            pread(
                 operation.fileno,
                 operation.nbytes,
                 operation.offset,
@@ -36,7 +60,7 @@ class Context(AbstractContext):
 
     @staticmethod
     def _handle_write(operation: "Operation"):
-        return os.pwrite(
+        return pwrite(
             operation.fileno, operation.buffer.getvalue(), operation.offset,
         )
 
