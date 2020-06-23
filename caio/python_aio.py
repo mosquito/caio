@@ -22,8 +22,8 @@ class Context(AbstractContext):
         self.pool = set()
 
         if not NATIVE_PREAD_PWRITE:
-            self._locks_cleaner = RLock()
-            self._locks = defaultdict(RLock)
+            self._locks_cleaner = RLock()       # type: ignore
+            self._locks = defaultdict(RLock)    # type: ignore
 
         for _ in range(pool_size):
             thread = Thread(target=self._in_thread)
