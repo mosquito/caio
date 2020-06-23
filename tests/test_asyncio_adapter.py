@@ -21,17 +21,18 @@ async def test_adapter(tmp_path, async_context_maker):
             assert await context.read(32, fd, 0) == s
 
             part = b"\x00\x01\x02\x03"
+            limit = 32
+            expected_hash = hashlib.md5(part * limit).hexdigest()
 
             await asyncio.gather(
-                *[context.write(part, fd, len(part) * i) for i in range(1024)]
+                *[context.write(part, fd, len(part) * i) for i in range(limit)]
             )
 
             await context.fdsync(fd)
 
-            data = await context.read(1024 * len(part), fd, 0) == part * 1024
-            assert data
+            data = await context.read(limit * len(part), fd, 0)
+            assert data == part * limit
 
-            expected_hash = "93b885adfe0da089cdf634904fd59f71"
             assert hashlib.md5(bytes(data)).hexdigest() == expected_hash
 
 
