@@ -2,8 +2,9 @@ import os
 from collections import defaultdict
 from enum import IntEnum, unique
 from io import BytesIO
-from queue import Queue, Empty
-from threading import Thread, RLock
+from multiprocessing.pool import ThreadPool
+from threading import RLock, Lock
+from types import MappingProxyType
 from typing import Any, Callable, Optional, Union
 
 from .abstract import AbstractContext, AbstractOperation
@@ -13,23 +14,57 @@ fdsync = getattr(os, "fdatasync", os.fsync)
 NATIVE_PREAD_PWRITE = hasattr(os, "pread") and hasattr(os, "pwrite")
 
 
+@unique
+class OpCode(IntEnum):
+    READ = 0
+    WRITE = 1
+    FSYNC = 2
+    FDSYNC = 3
+    NOOP = -1
+
+
 class Context(AbstractContext):
     def __init__(self, max_requests: int = 32, pool_size: int = 8):
-        assert max_requests < 65535 or max_requests is None
         assert pool_size < 128
 
-        self.queue = Queue(max_requests)    # type: Queue
-        self.pool = set()
+        self.__max_requests = max_requests
+        self.pool = ThreadPool(pool_size)
+        self._in_progress = 0
+        self._closed = False
+        self._closed_lock = Lock()
 
         if not NATIVE_PREAD_PWRITE:
             self._locks_cleaner = RLock()       # type: ignore
             self._locks = defaultdict(RLock)    # type: ignore
 
-        for _ in range(pool_size):
-            thread = Thread(target=self._in_thread)
-            thread.daemon = True
-            self.pool.add(thread)
-            thread.start()
+    @property
+    def max_requests(self) -> int:
+        return self.__max_requests
+
+    def _execute(self, operation: "Operation"):
+        handler = self._OP_MAP[operation.opcode]
+
+        def on_error(exc):
+            self._in_progress -= 1
+            operation.exception = exc
+            operation.callback(None)
+
+        def on_success(result):
+            self._in_progress -= 1
+            operation.callback(result)
+
+        if self._in_progress > self.__max_requests:
+            raise RuntimeError(
+                "Maximum simultaneous requests have been reached"
+            )
+
+        self._in_progress += 1
+
+        self.pool.apply_async(
+            handler, args=(self, operation,),
+            callback=on_success,
+            error_callback=on_error
+        )
 
     if NATIVE_PREAD_PWRITE:
         def __pread(self, fd, size, offset):
@@ -40,21 +75,15 @@ class Context(AbstractContext):
     else:
         def __pread(self, fd, size, offset):
             with self._locks[fd]:
-                fd = os.dup(fd)
+                os.lseek(fd, 0, os.SEEK_SET)
                 os.lseek(fd, offset, os.SEEK_SET)
-                try:
-                    return os.read(fd, size)
-                finally:
-                    os.close(fd)
+                return os.read(fd, size)
 
         def __pwrite(self, fd, bytes, offset):
             with self._locks[fd]:
-                fd = os.dup(fd)
+                os.lseek(fd, 0, os.SEEK_SET)
                 os.lseek(fd, offset, os.SEEK_SET)
-                try:
-                    return os.write(fd, bytes)
-                finally:
-                    os.close(fd)
+                return os.write(fd, bytes)
 
     def _handle_read(self, operation: "Operation"):
         return operation.buffer.write(
@@ -70,51 +99,14 @@ class Context(AbstractContext):
             operation.fileno, operation.buffer.getvalue(), operation.offset,
         )
 
-    @staticmethod
-    def _handle_fsync(operation: "Operation"):
+    def _handle_fsync(self, operation: "Operation"):
         return os.fsync(operation.fileno)
 
-    @staticmethod
-    def _handle_fdsync(operation: "Operation"):
+    def _handle_fdsync(self, operation: "Operation"):
         return fdsync(operation.fileno)
 
-    @staticmethod
-    def _handle_noop(operation: "Operation"):
+    def _handle_noop(self, operation: "Operation"):
         return
-
-    def _in_thread(self):
-        op_map = {
-            OpCode.READ: self._handle_read,
-            OpCode.WRITE: self._handle_write,
-            OpCode.FSYNC: self._handle_fsync,
-            OpCode.FDSYNC: self._handle_fdsync,
-            OpCode.NOOP: self._handle_noop,
-        }
-        while True:
-            try:
-                operation = self.queue.get(timeout=0.5)
-            except Empty:
-                if not NATIVE_PREAD_PWRITE:
-                    with self._locks_cleaner:
-                        self._locks.clear()
-
-                continue
-
-            if operation is None:
-                return
-
-            result = 0
-            try:
-                result = op_map[operation.opcode](operation)
-            except Exception as e:
-                operation.exception = e
-
-            if operation.callback is not None:
-                operation.callback(result)
-
-    @property
-    def max_requests(self) -> int:
-        return self.queue.maxsize
 
     def submit(self, *aio_operations) -> int:
         operations = []
@@ -127,28 +119,30 @@ class Context(AbstractContext):
 
         count = 0
         for operation in operations:
-            self.queue.put_nowait(operation)
+            self._execute(operation)
             count += 1
 
         return count
 
     def close(self):
-        for _ in range(len(self.pool)):
-            self.queue.put_nowait(None)
-        self.pool.clear()
+        if self._closed:
+            return
+
+        with self._closed_lock:
+            self.pool.close()
+            self._closed = True
 
     def __del__(self):
-        if self.pool:
+        if self.pool.close():
             self.close()
 
-
-@unique
-class OpCode(IntEnum):
-    READ = 0
-    WRITE = 1
-    FSYNC = 2
-    FDSYNC = 3
-    NOOP = -1
+    _OP_MAP = MappingProxyType({
+        OpCode.READ: _handle_read,
+        OpCode.WRITE: _handle_write,
+        OpCode.FSYNC: _handle_fsync,
+        OpCode.FDSYNC: _handle_fdsync,
+        OpCode.NOOP: _handle_noop,
+    })
 
 
 # noinspection PyPropertyDefinition
