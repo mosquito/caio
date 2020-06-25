@@ -75,13 +75,13 @@ class Context(AbstractContext):
     else:
         def __pread(self, fd, size, offset):
             with self._locks[fd]:
-                fp = os.fdopen(fd)
+                fp = os.fdopen(fd, mode="rb")
                 fp.seek(offset)
                 return fp.read(size)
 
         def __pwrite(self, fd, bytes, offset):
             with self._locks[fd]:
-                fp = os.fdopen(fd)
+                fp = os.fdopen(fd, mode="ab")
                 fp.seek(offset)
                 return fp.write(bytes)
 
