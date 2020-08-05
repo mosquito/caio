@@ -1,6 +1,6 @@
 author_info = (("Dmitry Orlov", "me@mosquito.su"),)
 
-package_info = "Asynchronous file IO for Linux Posix and Wondows."
+package_info = "Asynchronous file IO for Linux Posix and Windows."
 package_license = "Apache Software License"
 
 team_email = author_info[0][1]
