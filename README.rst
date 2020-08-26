@@ -1,7 +1,7 @@
 Python wrapper for AIO
 ======================
 
-.. note: The Linux libaio like implementation requires kernel greater than 4.16 otherwise the will be used thread-based implementations as a fallback.
+.. warning:: The Linux libaio like implementation requires kernel greater than 4.16 otherwise the will be used thread-based implementations as a fallback.
 
 Python bindings for Linux AIO API and simple asyncio wrapper.
 
