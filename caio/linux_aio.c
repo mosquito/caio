@@ -8,6 +8,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <structmember.h>
+#include <sys/utsname.h>
 
 
 static const unsigned CTX_MAX_REQUESTS_DEFAULT = 32;
@@ -801,6 +802,26 @@ static PyModuleDef linux_aio_module = {
 
 
 PyMODINIT_FUNC PyInit_linux_aio(void) {
+    struct utsname uname_data;
+
+    if (uname(&uname_data)) {
+        PyErr_SetString(PyExc_ImportError, "Can not detect linux kernel version");
+        return NULL;
+    }
+
+    int release[2] = {0};
+    sscanf(uname_data.release, "%d.%d", &release[0], &release[1]);
+    
+    if (release[0] < 4 && release[1] < 16) {
+        PyErr_Format(
+            PyExc_ImportError,
+            "The module requires kernel version greater than 4.16, not %s",
+            uname_data.release
+        );
+        return NULL;
+    }
+
+
     AIOContextTypeP = &AIOContextType;
     AIOOperationTypeP = &AIOOperationType;
 
