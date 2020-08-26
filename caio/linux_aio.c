@@ -13,32 +13,32 @@
 
 static const unsigned CTX_MAX_REQUESTS_DEFAULT = 32;
 static const unsigned EV_MAX_REQUESTS_DEFAULT = 512;
-
+static int fsync_support = -1;
 
 inline int io_setup(unsigned nr, aio_context_t *ctxp) {
-	return syscall(__NR_io_setup, nr, ctxp);
+    return syscall(__NR_io_setup, nr, ctxp);
 }
 
 
 inline int io_destroy(aio_context_t ctx) {
-	return syscall(__NR_io_destroy, ctx);
+    return syscall(__NR_io_destroy, ctx);
 }
 
 
 inline int io_getevents(aio_context_t ctx, long min_nr, long max_nr,
-		struct io_event *events, struct timespec *timeout) {
-	return syscall(__NR_io_getevents, ctx, min_nr, max_nr, events, timeout);
+        struct io_event *events, struct timespec *timeout) {
+    return syscall(__NR_io_getevents, ctx, min_nr, max_nr, events, timeout);
 }
 
 
 inline int io_submit(aio_context_t ctx, long nr, struct iocb **iocbpp) {
-	return syscall(__NR_io_submit, ctx, nr, iocbpp);
+    return syscall(__NR_io_submit, ctx, nr, iocbpp);
 }
 
 
 typedef struct {
     PyObject_HEAD
-    aio_context_t ctx;
+        aio_context_t ctx;
     int fileno;
     unsigned max_requests;
 } AIOContext;
@@ -46,7 +46,7 @@ typedef struct {
 
 typedef struct {
     PyObject_HEAD
-    AIOContext* context;
+        AIOContext* context;
     PyObject* py_buffer;
     PyObject* callback;
     char* buffer;
@@ -77,8 +77,8 @@ AIOContext_dealloc(AIOContext *self) {
 }
 
 /*
-    AIOContext.__new__ classmethod definition
-*/
+   AIOContext.__new__ classmethod definition
+   */
 static PyObject *
 AIOContext_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
     AIOContext *self;
@@ -87,7 +87,7 @@ AIOContext_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
     return (PyObject *) self;
 }
 
-static int
+    static int
 AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
 {
     static char *kwlist[] = {"max_requests", NULL};
@@ -123,20 +123,20 @@ static PyObject* AIOContext_repr(AIOContext *self) {
         return NULL;
     }
     return PyUnicode_FromFormat(
-        "<%s as %p: max_requests=%i, ctx=%lli>",
-        Py_TYPE(self)->tp_name, self, self->max_requests, self->ctx
-    );
+            "<%s as %p: max_requests=%i, ctx=%lli>",
+            Py_TYPE(self)->tp_name, self, self->max_requests, self->ctx
+            );
 }
 
 
 
 PyDoc_STRVAR(AIOContext_submit_docstring,
-    "Accepts multiple Operations. Returns \n\n"
-    "    Operation.submit(aio_op1, aio_op2, aio_opN, ...) -> int"
-);
+        "Accepts multiple Operations. Returns \n\n"
+        "    Operation.submit(aio_op1, aio_op2, aio_opN, ...) -> int"
+        );
 static PyObject* AIOContext_submit(
-    AIOContext *self, PyObject *args
-) {
+        AIOContext *self, PyObject *args
+        ) {
     if (self == 0) {
         PyErr_SetString(PyExc_RuntimeError, "self is NULL");
         return NULL;
@@ -166,9 +166,9 @@ static PyObject* AIOContext_submit(
         obj = PyTuple_GetItem(args, i);
         if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
             PyErr_Format(
-                PyExc_TypeError,
-                "Wrong type for argument %d", i
-            );
+                    PyExc_TypeError,
+                    "Wrong type for argument %d", i
+                    );
             PyMem_Free(iocbpp);
             return NULL;
         }
@@ -199,12 +199,12 @@ static PyObject* AIOContext_submit(
 }
 
 PyDoc_STRVAR(AIOContext_process_events_docstring,
-    "Gather events for Context. \n\n"
-    "    Operation.process_events(max_events, min_events) -> Tuple[Tuple[]]"
-);
+        "Gather events for Context. \n\n"
+        "    Operation.process_events(max_events, min_events) -> Tuple[Tuple[]]"
+        );
 static PyObject* AIOContext_process_events(
-    AIOContext *self, PyObject *args, PyObject *kwds
-) {
+        AIOContext *self, PyObject *args, PyObject *kwds
+        ) {
     if (self->ctx == 0) {
         PyErr_SetNone(PyExc_RuntimeError);
         return NULL;
@@ -217,9 +217,9 @@ static PyObject* AIOContext_process_events(
     static char *kwlist[] = {"max_requests", "min_requests", "timeout", NULL};
 
     if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "|HHi", kwlist,
-        &max_requests, &min_requests, &timeout.tv_sec
-    )) { return NULL; }
+                args, kwds, "|HHi", kwlist,
+                &max_requests, &min_requests, &timeout.tv_sec
+                )) { return NULL; }
 
     if (max_requests == 0) {
         max_requests = EV_MAX_REQUESTS_DEFAULT;
@@ -227,22 +227,22 @@ static PyObject* AIOContext_process_events(
 
     if (min_requests > max_requests) {
         PyErr_Format(
-            PyExc_ValueError,
-            "min_requests \"%d\" must be lower then max_requests \"%d\"",
-            min_requests, max_requests
-        );
+                PyExc_ValueError,
+                "min_requests \"%d\" must be lower then max_requests \"%d\"",
+                min_requests, max_requests
+                );
         return NULL;
     }
 
     struct io_event events[max_requests];
 
     int result = io_getevents(
-        self->ctx,
-        min_requests,
-        max_requests,
-        events,
-        &timeout
-    );
+            self->ctx,
+            min_requests,
+            max_requests,
+            events,
+            &timeout
+            );
 
     if (result < 0) {
         PyErr_SetFromErrno(PyExc_SystemError);
@@ -275,12 +275,12 @@ static PyObject* AIOContext_process_events(
 
 
 PyDoc_STRVAR(AIOContext_poll_docstring,
-    "Read value from context file descriptor.\n\n"
-    "    Context().poll() -> int"
-);
+        "Read value from context file descriptor.\n\n"
+        "    Context().poll() -> int"
+        );
 static PyObject* AIOContext_poll(
-    AIOContext *self, PyObject *args
-) {
+        AIOContext *self, PyObject *args
+        ) {
     if (self->ctx == 0) {
         PyErr_SetNone(PyExc_RuntimeError);
         return NULL;
@@ -304,8 +304,8 @@ static PyObject* AIOContext_poll(
 
 
 /*
-    AIOContext properties
-*/
+   AIOContext properties
+   */
 static PyMemberDef AIOContext_members[] = {
     {
         "fileno",
@@ -346,7 +346,7 @@ static PyMethodDef AIOContext_methods[] = {
 static PyTypeObject
 AIOContextType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "Context",
+        .tp_name = "Context",
     .tp_doc = "linux aio context representation",
     .tp_basicsize = sizeof(AIOContext),
     .tp_itemsize = 0,
@@ -385,6 +385,8 @@ static PyObject* AIOOperation_repr(AIOOperation *self) {
 
         case IOCB_CMD_PWRITE:
             mode = "write";
+            if (fsync_support && self->iocb.aio_rw_flags == RWF_SYNC) mode = "fsync";
+            if (fsync_support && self->iocb.aio_rw_flags == RWF_DSYNC) mode = "fdsync";
             break;
 
         case IOCB_CMD_FSYNC:
@@ -400,30 +402,30 @@ static PyObject* AIOOperation_repr(AIOOperation *self) {
     }
 
     return PyUnicode_FromFormat(
-        "<%s at %p: mode=\"%s\", fd=%i, offset=%i, buffer=%p>",
-        Py_TYPE(self)->tp_name, self, mode,
-        self->iocb.aio_fildes, self->iocb.aio_offset, self->iocb.aio_buf
-    );
+            "<%s at %p: mode=\"%s\", fd=%i, offset=%i, buffer=%p>",
+            Py_TYPE(self)->tp_name, self, mode,
+            self->iocb.aio_fildes, self->iocb.aio_offset, self->iocb.aio_buf
+            );
 }
 
 
 /*
-    AIOOperation.read classmethod definition
-*/
+   AIOOperation.read classmethod definition
+   */
 PyDoc_STRVAR(AIOOperation_read_docstring,
-    "Creates a new instance of Operation on read mode.\n\n"
-    "    Operation.read(\n"
-    "        nbytes: int,\n"
-    "        aio_context: Context,\n"
-    "        fd: int, \n"
-    "        offset: int,\n"
-    "        priority=0\n"
-    "    )"
-);
+        "Creates a new instance of Operation on read mode.\n\n"
+        "    Operation.read(\n"
+        "        nbytes: int,\n"
+        "        aio_context: Context,\n"
+        "        fd: int, \n"
+        "        offset: int,\n"
+        "        priority=0\n"
+        "    )"
+        );
 
 static PyObject* AIOOperation_read(
-    PyTypeObject *type, PyObject *args, PyObject *kwds
-) {
+        PyTypeObject *type, PyObject *args, PyObject *kwds
+        ) {
     AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
 
     static char *kwlist[] = {"nbytes", "fd", "offset", "priority", NULL};
@@ -443,12 +445,12 @@ static PyObject* AIOOperation_read(
     uint64_t nbytes = 0;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "KI|LH", kwlist,
-        &nbytes,
-        &(self->iocb.aio_fildes),
-        &(self->iocb.aio_offset),
-        &(self->iocb.aio_reqprio)
-    );
+            args, kwds, "KI|LH", kwlist,
+            &nbytes,
+            &(self->iocb.aio_fildes),
+            &(self->iocb.aio_offset),
+            &(self->iocb.aio_reqprio)
+            );
 
     if (!argIsOk) return NULL;
 
@@ -462,21 +464,21 @@ static PyObject* AIOOperation_read(
 }
 
 /*
-    AIOOperation.write classmethod definition
-*/
+   AIOOperation.write classmethod definition
+   */
 PyDoc_STRVAR(AIOOperation_write_docstring,
-    "Creates a new instance of Operation on write mode.\n\n"
-    "    Operation.write(\n"
-    "        payload_bytes: bytes,\n"
-    "        fd: int, \n"
-    "        offset: int,\n"
-    "        priority=0\n"
-    "    )"
-);
+        "Creates a new instance of Operation on write mode.\n\n"
+        "    Operation.write(\n"
+        "        payload_bytes: bytes,\n"
+        "        fd: int, \n"
+        "        offset: int,\n"
+        "        priority=0\n"
+        "    )"
+        );
 
 static PyObject* AIOOperation_write(
-    PyTypeObject *type, PyObject *args, PyObject *kwds
-) {
+        PyTypeObject *type, PyObject *args, PyObject *kwds
+        ) {
     AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
 
     static char *kwlist[] = {"payload_bytes", "fd", "offset", "priority", NULL};
@@ -497,36 +499,36 @@ static PyObject* AIOOperation_write(
     Py_ssize_t nbytes = 0;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "OI|LH", kwlist,
-        &(self->py_buffer),
-        &(self->iocb.aio_fildes),
-        &(self->iocb.aio_offset),
-        &(self->iocb.aio_reqprio)
-    );
+            args, kwds, "OI|LH", kwlist,
+            &(self->py_buffer),
+            &(self->iocb.aio_fildes),
+            &(self->iocb.aio_offset),
+            &(self->iocb.aio_reqprio)
+            );
 
     if (!argIsOk) return NULL;
 
     if (!PyBytes_Check(self->py_buffer)) {
         Py_XDECREF(self);
         PyErr_SetString(
-            PyExc_ValueError,
-            "payload_bytes argument must be bytes"
-        );
+                PyExc_ValueError,
+                "payload_bytes argument must be bytes"
+                );
         return NULL;
     }
 
     self->iocb.aio_lio_opcode = IOCB_CMD_PWRITE;
 
     if (PyBytes_AsStringAndSize(
-            self->py_buffer,
-            &self->buffer,
-            &nbytes
-    )) {
+                self->py_buffer,
+                &self->buffer,
+                &nbytes
+                )) {
         Py_XDECREF(self);
         PyErr_SetString(
-            PyExc_RuntimeError,
-            "Can not convert bytes to c string"
-        );
+                PyExc_RuntimeError,
+                "Can not convert bytes to c string"
+                );
         return NULL;
     }
 
@@ -535,25 +537,25 @@ static PyObject* AIOOperation_write(
     self->iocb.aio_nbytes = nbytes;
     self->iocb.aio_buf = (uint64_t) self->buffer;
 
-	return (PyObject*) self;
+    return (PyObject*) self;
 }
 
 
 /*
-    AIOOperation.fsync classmethod definition
-*/
+   AIOOperation.fsync classmethod definition
+   */
 PyDoc_STRVAR(AIOOperation_fsync_docstring,
-    "Creates a new instance of Operation on fsync mode.\n\n"
-    "    Operation.fsync(\n"
-    "        aio_context: AIOContext,\n"
-    "        fd: int, \n"
-    "        priority=0\n"
-    "    )"
-);
+        "Creates a new instance of Operation on fsync mode.\n\n"
+        "    Operation.fsync(\n"
+        "        aio_context: AIOContext,\n"
+        "        fd: int, \n"
+        "        priority=0\n"
+        "    )"
+        );
 
 static PyObject* AIOOperation_fsync(
-    PyTypeObject *type, PyObject *args, PyObject *kwds
-) {
+        PyTypeObject *type, PyObject *args, PyObject *kwds
+        ) {
     AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
 
     static char *kwlist[] = {"fd", "priority", NULL};
@@ -566,37 +568,47 @@ static PyObject* AIOOperation_fsync(
     memset(&self->iocb, 0, sizeof(struct iocb));
 
     self->iocb.aio_data = self;
+    self->iocb.aio_rw_flags = RWF_DSYNC;
     self->context = NULL;
     self->buffer = NULL;
     self->py_buffer = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "I|H", kwlist,
-        &(self->iocb.aio_fildes),
-        &(self->iocb.aio_reqprio)
-    );
+            args, kwds, "I|H", kwlist,
+            &(self->iocb.aio_fildes),
+            &(self->iocb.aio_reqprio)
+            );
 
     if (!argIsOk) return NULL;
+
+    if (!fsync_support) {
+        self->iocb.aio_rw_flags = RWF_DSYNC;
+        self->iocb.aio_nbytes = 0;
+        self->iocb.aio_buf = NULL;
+        self->iocb.aio_lio_opcode = IOCB_CMD_PWRITE;
+    } else {
+        self->iocb.aio_lio_opcode = IOCB_CMD_FSYNC;
+    }
 
     return (PyObject*) self;
 }
 
 
 /*
-    AIOOperation.fdsync classmethod definition
-*/
+   AIOOperation.fdsync classmethod definition
+   */
 PyDoc_STRVAR(AIOOperation_fdsync_docstring,
-    "Creates a new instance of Operation on fdsync mode.\n\n"
-    "    Operation.fdsync(\n"
-    "        aio_context: AIOContext,\n"
-    "        fd: int, \n"
-    "        priority=0\n"
-    "    )"
-);
+        "Creates a new instance of Operation on fdsync mode.\n\n"
+        "    Operation.fdsync(\n"
+        "        aio_context: AIOContext,\n"
+        "        fd: int, \n"
+        "        priority=0\n"
+        "    )"
+        );
 
 static PyObject* AIOOperation_fdsync(
-    PyTypeObject *type, PyObject *args, PyObject *kwds
-) {
+        PyTypeObject *type, PyObject *args, PyObject *kwds
+        ) {
     AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
 
     static char *kwlist[] = {"fd", "priority", NULL};
@@ -613,35 +625,42 @@ static PyObject* AIOOperation_fdsync(
     self->py_buffer = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "I|H", kwlist,
-        &(self->iocb.aio_fildes),
-        &(self->iocb.aio_reqprio)
-    );
+            args, kwds, "I|H", kwlist,
+            &(self->iocb.aio_fildes),
+            &(self->iocb.aio_reqprio)
+            );
 
     if (!argIsOk) return NULL;
 
-    self->iocb.aio_lio_opcode = IOCB_CMD_FDSYNC;
+    if (!fsync_support) {
+        self->iocb.aio_rw_flags = RWF_DSYNC;
+        self->iocb.aio_nbytes = 0;
+        self->iocb.aio_buf = NULL;
+        self->iocb.aio_lio_opcode = IOCB_CMD_PWRITE;
+    } else {
+        self->iocb.aio_lio_opcode = IOCB_CMD_FDSYNC;
+    }
 
     return (PyObject*) self;
 }
 
 /*
-    AIOOperation.get_value method definition
-*/
+   AIOOperation.get_value method definition
+   */
 PyDoc_STRVAR(AIOOperation_get_value_docstring,
-    "Method returns a bytes value of Operation's result or None.\n\n"
-    "    Operation.get_value() -> Optional[bytes]"
-);
+        "Method returns a bytes value of Operation's result or None.\n\n"
+        "    Operation.get_value() -> Optional[bytes]"
+        );
 
 static PyObject* AIOOperation_get_value(
-    AIOOperation *self, PyObject *args, PyObject *kwds
-) {
+        AIOOperation *self, PyObject *args, PyObject *kwds
+        ) {
 
     if (self->error != 0) {
         PyErr_SetString(
-            PyExc_SystemError,
-            strerror(self->error)
-        );
+                PyExc_SystemError,
+                strerror(self->error)
+                );
 
         return NULL;
     }
@@ -649,8 +668,8 @@ static PyObject* AIOOperation_get_value(
     switch (self->iocb.aio_lio_opcode) {
         case IOCB_CMD_PREAD:
             return PyBytes_FromStringAndSize(
-                self->buffer, self->iocb.aio_nbytes
-            );
+                    self->buffer, self->iocb.aio_nbytes
+                    );
 
         case IOCB_CMD_PWRITE:
             return PyLong_FromSsize_t(self->iocb.aio_nbytes);
@@ -661,33 +680,33 @@ static PyObject* AIOOperation_get_value(
 
 
 /*
-    AIOOperation.set_callback method definition
-*/
+   AIOOperation.set_callback method definition
+   */
 PyDoc_STRVAR(AIOOperation_set_callback_docstring,
-    "Set callback which will be called after Operation will be finished.\n\n"
-    "    Operation.get_value() -> Optional[bytes]"
-);
+        "Set callback which will be called after Operation will be finished.\n\n"
+        "    Operation.get_value() -> Optional[bytes]"
+        );
 
 static PyObject* AIOOperation_set_callback(
-    AIOOperation *self, PyObject *args, PyObject *kwds
-) {
+        AIOOperation *self, PyObject *args, PyObject *kwds
+        ) {
     static char *kwlist[] = {"callback", NULL};
 
     PyObject* callback;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "O", kwlist,
-        &callback
-    );
+            args, kwds, "O", kwlist,
+            &callback
+            );
 
     if (!argIsOk) return NULL;
 
     if (!PyCallable_Check(callback)) {
         PyErr_Format(
-            PyExc_ValueError,
-            "object %r is not callable",
-            callback
-        );
+                PyExc_ValueError,
+                "object %r is not callable",
+                callback
+                );
         return NULL;
     }
 
@@ -698,8 +717,8 @@ static PyObject* AIOOperation_set_callback(
 }
 
 /*
-    AIOOperation properties
-*/
+   AIOOperation properties
+   */
 static PyMemberDef AIOOperation_members[] = {
     {
         "context", T_OBJECT,
@@ -735,8 +754,8 @@ static PyMemberDef AIOOperation_members[] = {
 };
 
 /*
-    AIOOperation methods
-*/
+   AIOOperation methods
+   */
 static PyMethodDef AIOOperation_methods[] = {
     {
         "read",
@@ -776,12 +795,12 @@ static PyMethodDef AIOOperation_methods[] = {
 };
 
 /*
-    AIOOperation class
-*/
+   AIOOperation class
+   */
 static PyTypeObject
 AIOOperationType = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "aio.AIOOperation",
+        .tp_name = "aio.AIOOperation",
     .tp_doc = "linux aio operation representation",
     .tp_basicsize = sizeof(AIOOperation),
     .tp_itemsize = 0,
@@ -814,13 +833,14 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
 
     if (release[0] < 4 && release[1] < 13) {
         PyErr_Format(
-            PyExc_ImportError,
-            "The module requires kernel version greater than 4.13, not %s",
-            uname_data.release
-        );
+                PyExc_ImportError,
+                "The module requires kernel version greater than 4.13, not %s",
+                uname_data.release
+                );
         return NULL;
     }
 
+    fsync_support = !(release[0] == 4 && release[1] < 16);
 
     AIOContextTypeP = &AIOContextType;
     AIOOperationTypeP = &AIOOperationType;
@@ -853,3 +873,4 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
 
     return m;
 }
+
