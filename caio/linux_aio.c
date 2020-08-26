@@ -159,8 +159,9 @@ static PyObject* AIOContext_submit(
     AIOOperation* op;
 
     struct iocb** iocbpp = PyMem_Calloc(nr, sizeof(struct iocb*));
+    uint32_t i;
 
-    for (uint32_t i=0; i < nr; i++) {
+    for (i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
         if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
             PyErr_Format(
@@ -456,7 +457,7 @@ static PyObject* AIOOperation_read(
     self->py_buffer = PyMemoryView_FromMemory(self->buffer, nbytes, PyBUF_READ);
     self->iocb.aio_lio_opcode = IOCB_CMD_PREAD;
 
-	return (PyObject*) self;
+    return (PyObject*) self;
 }
 
 /*
@@ -576,7 +577,7 @@ static PyObject* AIOOperation_fsync(
 
     if (!argIsOk) return NULL;
 
-	return (PyObject*) self;
+    return (PyObject*) self;
 }
 
 
@@ -620,7 +621,7 @@ static PyObject* AIOOperation_fdsync(
 
     self->iocb.aio_lio_opcode = IOCB_CMD_FDSYNC;
 
-	return (PyObject*) self;
+    return (PyObject*) self;
 }
 
 /*

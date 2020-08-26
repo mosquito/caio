@@ -268,8 +268,9 @@ static PyObject* AIOContext_submit(
 
     PyObject* obj;
     AIOOperation* ops[nr];
+    unsigned int i;
 
-    for (unsigned int i=0; i < nr; i++) {
+    for (i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
         if (PyObject_TypeCheck(obj, &AIOOperationType) == 0) {
             PyErr_Format(
@@ -287,7 +288,7 @@ static PyObject* AIOContext_submit(
     unsigned int j=0;
     int result = 0;
 
-    for (unsigned int i=0; i < nr; i++) {
+    for (i=0; i < nr; i++) {
         if (ops[i]->in_progress) continue;
         ops[i]->in_progress = 1;
         Py_INCREF(ops[i]);
