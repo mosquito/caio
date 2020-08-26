@@ -1,6 +1,8 @@
 Python wrapper for AIO
 ======================
 
+.. note: The Linux libaio like implementation requires kernel greater than 4.16 otherwise the will be used thread-based implementations as a fallback.
+
 Python bindings for Linux AIO API and simple asyncio wrapper.
 
 Example
@@ -9,13 +11,13 @@ Example
 .. code-block:: python
 
     import asyncio
-    from linux_aio import AsyncioAIOContext
+    from caio import AsyncioContext
 
     loop = asyncio.get_event_loop()
 
     async def main():
         # max_requests=128 by default
-        ctx = AsyncioAIOContext(max_requests=128)
+        ctx = AsyncioContext(max_requests=128)
 
         with open("test.file", "wb+") as fp:
             fd = fp.fileno()
