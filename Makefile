@@ -14,5 +14,5 @@ linux_wheel:
 		-v `pwd`:/app/src:ro \
 		-v `pwd`/dist:/app/dst \
 		--entrypoint /bin/bash \
-		quay.io/pypa/manylinux2014_x86_64 \
+		quay.io/pypa/manylinux2010_x86_64 \
 		/app/src/scripts/make-wheels.sh

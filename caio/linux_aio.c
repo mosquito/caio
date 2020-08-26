@@ -811,11 +811,11 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
 
     int release[2] = {0};
     sscanf(uname_data.release, "%d.%d", &release[0], &release[1]);
-    
-    if (release[0] < 4 && release[1] < 16) {
+
+    if (release[0] < 4 && release[1] < 13) {
         PyErr_Format(
             PyExc_ImportError,
-            "The module requires kernel version greater than 4.16, not %s",
+            "The module requires kernel version greater than 4.13, not %s",
             uname_data.release
         );
         return NULL;
