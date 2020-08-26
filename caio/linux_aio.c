@@ -384,8 +384,6 @@ static PyObject* AIOOperation_repr(AIOOperation *self) {
 
         case IOCB_CMD_PWRITE:
             mode = "write";
-            if (fsync_support && self->iocb.aio_rw_flags == RWF_SYNC) mode = "fsync";
-            if (fsync_support && self->iocb.aio_rw_flags == RWF_DSYNC) mode = "fdsync";
             break;
 
         case IOCB_CMD_FSYNC:
@@ -565,7 +563,6 @@ static PyObject* AIOOperation_fsync(
     memset(&self->iocb, 0, sizeof(struct iocb));
 
     self->iocb.aio_data = self;
-    self->iocb.aio_rw_flags = RWF_DSYNC;
     self->context = NULL;
     self->buffer = NULL;
     self->py_buffer = NULL;
@@ -578,11 +575,7 @@ static PyObject* AIOOperation_fsync(
 
     if (!argIsOk) return NULL;
 
-    if (!fsync_support) {
-        self->iocb.aio_rw_flags = RWF_DSYNC;
-        self->iocb.aio_nbytes = 0;
-        self->iocb.aio_lio_opcode = IOCB_CMD_PWRITE;
-    } else {
+    if (fsync_support) {
         self->iocb.aio_lio_opcode = IOCB_CMD_FSYNC;
     }
 
@@ -628,11 +621,7 @@ static PyObject* AIOOperation_fdsync(
 
     if (!argIsOk) return NULL;
 
-    if (!fsync_support) {
-        self->iocb.aio_rw_flags = RWF_DSYNC;
-        self->iocb.aio_nbytes = 0;
-        self->iocb.aio_lio_opcode = IOCB_CMD_PWRITE;
-    } else {
+    if (fsync_support) {
         self->iocb.aio_lio_opcode = IOCB_CMD_FDSYNC;
     }
 
@@ -826,16 +815,25 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
     int release[2] = {0};
     sscanf(uname_data.release, "%d.%d", &release[0], &release[1]);
 
-    if (release[0] < 4 && release[1] < 13) {
+    if (release[0] < 4 && release[1] < 14) {
         PyErr_Format(
             PyExc_ImportError,
-            "The module requires kernel version greater than 4.13, not %s",
+            "The module requires kernel version greater than 4.14, not %s",
             uname_data.release
         );
         return NULL;
     }
 
-    fsync_support = !(release[0] == 4 && release[1] < 16);
+    fsync_support = !(release[0] == 4 && release[1] < 18);
+
+    if (!fsync_support) {
+        PyErr_WarnFormat(
+            PyExc_RuntimeWarning, 0,
+            "Linux supports fsync/fdsync with io_submit since 4.18 but current "
+            "kernel %s doesn't support it. Related calls will have no effect.",
+            uname_data.release
+        );
+    }
 
     AIOContextTypeP = &AIOContextType;
     AIOOperationTypeP = &AIOOperationType;
