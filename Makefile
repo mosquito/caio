@@ -9,6 +9,7 @@ mac_wheel:
 	python3.7 setup.py bdist_wheel
 	python3.8 setup.py bdist_wheel
 
+
 linux_wheel:
 	docker run -it --rm \
 		-v `pwd`:/app/src:ro \

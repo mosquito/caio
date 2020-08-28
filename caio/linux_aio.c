@@ -815,16 +815,7 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
     int release[2] = {0};
     sscanf(uname_data.release, "%d.%d", &release[0], &release[1]);
 
-    if (release[0] < 4 && release[1] < 14) {
-        PyErr_Format(
-            PyExc_ImportError,
-            "The module requires kernel version greater than 4.14, not %s",
-            uname_data.release
-        );
-        return NULL;
-    }
-
-    fsync_support = !(release[0] == 4 && release[1] < 18);
+    fsync_support = (release[0] > 4) || (release[0] == 4 && release[1] >= 18);
 
     if (!fsync_support) {
         PyErr_WarnFormat(

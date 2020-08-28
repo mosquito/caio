@@ -1,8 +1,6 @@
 Python wrapper for AIO
 ======================
 
-.. warning:: The Linux libaio like implementation requires kernel greater than 4.14 otherwise the will be used thread-based implementations as a fallback.
-
 .. warning:: ``fsync``/``fdsync`` operations in Linux aio implementation supports since 4.18. related calls will have no effect.
 
 Python bindings for Linux AIO API and simple asyncio wrapper.
