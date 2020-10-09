@@ -47,10 +47,12 @@ class Context(AbstractContext):
         def on_error(exc):
             self._in_progress -= 1
             operation.exception = exc
+            operation.written = 0
             operation.callback(None)
 
         def on_success(result):
             self._in_progress -= 1
+            operation.written = result
             operation.callback(result)
 
         if self._in_progress > self.__max_requests:
@@ -169,6 +171,7 @@ class Operation(AbstractOperation):
         self.__nbytes = nbytes or 0
         self.__priority = priority or 0
         self.exception = None
+        self.written = 0
 
     @classmethod
     def read(
@@ -219,7 +222,7 @@ class Operation(AbstractOperation):
             raise self.exception
 
         if self.opcode == OpCode.WRITE:
-            return self.__nbytes
+            return self.written
 
         if self.buffer is None:
             return
