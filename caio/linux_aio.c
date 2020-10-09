@@ -256,7 +256,11 @@ static PyObject* AIOContext_process_events(
         ev = &events[i];
 
         op = (AIOOperation*) ev->data;
-        op->iocb.aio_nbytes = ev->res;
+        if (ev->res >= 0) {
+            op->iocb.aio_nbytes = ev->res;
+        } else {
+            op->error = -ev->res;
+        }
 
         if (op->callback == NULL) {
             continue;
