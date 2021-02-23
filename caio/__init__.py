@@ -60,7 +60,7 @@ def __select_implementation():
                     requested = line
                     break
 
-    elif requested not in implementations:
+    elif requested and requested not in implementations:
         warnings.warn(
             "CAIO_IMPL contains unsupported value %r. Use one of %r" % (
                 requested, tuple(implementations),
