@@ -42,6 +42,8 @@ def __select_implementation():
         "python": (python_aio, python_aio_asyncio),
     }
 
+    implementations = {k: v for k, v in implementations.items() if all(v)}
+
     default_implementation = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "default_implementation"
     )
@@ -51,16 +53,17 @@ def __select_implementation():
     if not requested and os.path.isfile(default_implementation):
         with open(default_implementation, "r") as fp:
             for line in fp:
-                if line.startswith("#"):
+                line = line.strip()
+                if line.startswith("#") or not line:
                     continue
                 if line in implementations:
-                    requested = line.strip()
+                    requested = line
+                    break
 
     elif requested not in implementations:
         warnings.warn(
             "CAIO_IMPL contains unsupported value %r. Use one of %r" % (
-                requested,
-                tuple(k for k, v in implementations.items() if all(v)),
+                requested, tuple(implementations),
             ),
             RuntimeWarning
         )

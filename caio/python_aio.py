@@ -24,6 +24,9 @@ class OpCode(IntEnum):
 
 
 class Context(AbstractContext):
+    """
+    python aio context implementation
+    """
     def __init__(self, max_requests: int = 32, pool_size: int = 8):
         assert pool_size < 128
 
@@ -149,6 +152,9 @@ class Context(AbstractContext):
 
 # noinspection PyPropertyDefinition
 class Operation(AbstractOperation):
+    """
+    python aio operation implementation
+    """
     def __init__(
         self,
         fd: int,
