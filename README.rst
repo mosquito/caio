@@ -50,22 +50,22 @@ The ``linux`` implementation works normal for modern linux kernel versions
 and file systems. So you may have problems specific for your environment.
 It's not a bug and might be resolved some ways:
 
-   1. Upgrade the kernel
-   2. Use compatible file system
-   3. Use threads based or pure python implementation.
+1. Upgrade the kernel
+2. Use compatible file system
+3. Use threads based or pure python implementation.
 
 The caio since version 0.7.0 contains some ways to do this.
 
-   1. In runtime use the environment variable ``CAIO_IMPL`` with
-   possible values:
+1. In runtime use the environment variable ``CAIO_IMPL`` with
+possible values:
 
-     * ``linux`` - use native linux kernels aio mechanism
-     * ``thread`` - use thread based implementation written in C
-     * ``python`` - use pure python implementation
+* ``linux`` - use native linux kernels aio mechanism
+* ``thread`` - use thread based implementation written in C
+* ``python`` - use pure python implementation
 
-   2.  File ``default_implementation`` located near ``__init__.py`` in caio
-   installation path. It's useful for distros package maintainers. This file
-   might contains comments (lines starts with ``#`` symbol) and the first line
-   should be one of ``linux`` ``thread`` or ``python``.
+2.  File ``default_implementation`` located near ``__init__.py`` in caio
+installation path. It's useful for distros package maintainers. This file
+might contains comments (lines starts with ``#`` symbol) and the first line
+should be one of ``linux`` ``thread`` or ``python``.
 
 Previous versions allows direct import of the target implementation.
