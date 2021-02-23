@@ -1,4 +1,5 @@
 import os
+import platform
 import sys
 from subprocess import check_output
 
@@ -15,7 +16,10 @@ def implementation(request):
     if request.param is caio.python_aio:
         return "python"
 
+    raise RuntimeError("Unknown variant %r" % (request.param,))
 
+
+@pytest.mark.skipif(platform.system() == 'Windows', reason="Windows skip")
 def test_env_selector(implementation):
     output = check_output(
         [
