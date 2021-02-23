@@ -56,10 +56,13 @@ It's not a bug and might be resolved some ways:
 
 The caio since version 0.7.0 contains some ways to do this.
 
-   1. In runtime use the environment variable ``CAIO_IMPL`` with possible values:
+   1. In runtime use the environment variable ``CAIO_IMPL`` with
+   possible values:
+
      * ``linux`` - use native linux kernels aio mechanism
      * ``thread`` - use thread based implementation written in C
      * ``python`` - use pure python implementation
+
    2.  File ``default_implementation`` located near ``__init__.py`` in caio
    installation path. It's useful for distros package maintainers. This file
    might contains comments (lines starts with ``#`` symbol) and the first line
