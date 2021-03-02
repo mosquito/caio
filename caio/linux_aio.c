@@ -14,7 +14,7 @@
 
 static const unsigned CTX_MAX_REQUESTS_DEFAULT = 32;
 static const unsigned EV_MAX_REQUESTS_DEFAULT = 512;
-static int fsync_support = -1;
+static int kernel_support = -1;
 
 inline int io_setup(unsigned nr, aio_context_t *ctxp) {
     return syscall(__NR_io_setup, nr, ctxp);
@@ -579,9 +579,7 @@ static PyObject* AIOOperation_fsync(
 
     if (!argIsOk) return NULL;
 
-    if (fsync_support) {
-        self->iocb.aio_lio_opcode = IOCB_CMD_FSYNC;
-    }
+    self->iocb.aio_lio_opcode = IOCB_CMD_FSYNC;
 
     return (PyObject*) self;
 }
@@ -625,9 +623,7 @@ static PyObject* AIOOperation_fdsync(
 
     if (!argIsOk) return NULL;
 
-    if (fsync_support) {
-        self->iocb.aio_lio_opcode = IOCB_CMD_FDSYNC;
-    }
+    self->iocb.aio_lio_opcode = IOCB_CMD_FDSYNC;
 
     return (PyObject*) self;
 }
@@ -819,15 +815,16 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
     int release[2] = {0};
     sscanf(uname_data.release, "%d.%d", &release[0], &release[1]);
 
-    fsync_support = (release[0] > 4) || (release[0] == 4 && release[1] >= 18);
+    kernel_support = (release[0] > 4) || (release[0] == 4 && release[1] >= 18);
 
-    if (!fsync_support) {
-        PyErr_WarnFormat(
-            PyExc_RuntimeWarning, 0,
-            "Linux supports fsync/fdsync with io_submit since 4.18 but current "
-            "kernel %s doesn't support it. Related calls will have no effect.",
+    if (!kernel_support) {
+        PyErr_Format(
+            PyExc_ImportError,
+            "Linux kernel supported since 4.18 but current kernel is %s.",
             uname_data.release
         );
+
+        return NULL;
     }
 
     AIOContextTypeP = &AIOContextType;
