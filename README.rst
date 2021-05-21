@@ -1,7 +1,7 @@
 Python wrapper for AIO
 ======================
 
-.. warning:: ``fsync``/``fdsync`` operations in Linux aio implementation supports since 4.18. related calls will have no effect.
+.. warning:: Native Linux aio implementation supports since 4.18 kernel version.
 
 Python bindings for Linux AIO API and simple asyncio wrapper.
 
