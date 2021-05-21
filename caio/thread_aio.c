@@ -156,7 +156,7 @@ void worker(void *arg) {
     }
 
     int fileno = op->fileno;
-    int offset = op->offset;
+    off_t offset = op->offset;
     int buf_size = op->buf_size;
     char* buf = op->buf;
 
