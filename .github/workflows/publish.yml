@@ -96,8 +96,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Building manylinux1 wheels
-        uses: docker://quay.io/pypa/manylinux1_x86_64
+      - name: Building manylinux2010 wheels
+        uses: docker://quay.io/pypa/manylinux2010_x86_64
         with:
           args: /bin/bash scripts/make-wheels.sh
 
