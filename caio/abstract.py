@@ -10,6 +10,9 @@ class AbstractContext(abc.ABC):
     def submit(self, *aio_operations) -> int:
         raise NotImplementedError(aio_operations)
 
+    def cancel(self, *aio_operations) -> int:
+        raise NotImplementedError(aio_operations)
+
 
 class AbstractOperation(abc.ABC):
     @classmethod

@@ -302,6 +302,18 @@ static PyObject* AIOContext_submit(
 }
 
 
+PyDoc_STRVAR(AIOContext_cancel_docstring,
+    "Cancels multiple Operations. Returns \n\n"
+    "    Operation.cancel(aio_op1, aio_op2, aio_opN, ...) -> int\n\n"
+    "(Always returns zero, this method exists for compatibility reasons)"
+);
+static PyObject* AIOContext_cancel(
+    AIOContext *self, PyObject *args
+) {
+    return (PyObject*) PyLong_FromSsize_t(0);
+}
+
+
 /*
     AIOContext properties
 */
@@ -328,6 +340,11 @@ static PyMethodDef AIOContext_methods[] = {
         "submit",
         (PyCFunction) AIOContext_submit, METH_VARARGS,
         AIOContext_submit_docstring
+    },
+    {
+        "cancel",
+        (PyCFunction) AIOContext_cancel, METH_VARARGS,
+        AIOContext_cancel_docstring
     },
     {NULL}  /* Sentinel */
 };
