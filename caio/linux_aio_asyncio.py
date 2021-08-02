@@ -16,6 +16,8 @@ class AsyncioContext(AsyncioContextBase):
         Allow to set result directly.
         Cause process_events running in the same thread
         """
+        if future.done():
+            return
         future.set_result(True)
 
     def _destroy_context(self):

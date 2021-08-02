@@ -166,7 +166,7 @@ static PyObject* AIOContext_submit(AIOContext *self, PyObject *args) {
         if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
             PyErr_Format(
                 PyExc_TypeError,
-                "Wrong type for argument %d", i
+                "Wrong type for argument %d -> %r", i, obj
             );
             PyMem_Free(iocbpp);
             return NULL;
@@ -189,6 +189,75 @@ static PyObject* AIOContext_submit(AIOContext *self, PyObject *args) {
 
     if (result < 0) {
         PyErr_SetFromErrno(PyExc_SystemError);
+        PyMem_Free(iocbpp);
+        return NULL;
+    }
+
+    PyMem_Free(iocbpp);
+
+    return (PyObject*) PyLong_FromSsize_t(result);
+}
+
+
+PyDoc_STRVAR(AIOContext_cancel_docstring,
+    "Cancels multiple Operations. Returns \n\n"
+    "    Operation.cancel(aio_op1, aio_op2, aio_opN, ...) -> int"
+);
+static PyObject* AIOContext_cancel(AIOContext *self, PyObject *args) {
+    if (self == 0) {
+        PyErr_SetString(PyExc_RuntimeError, "self is NULL");
+        return NULL;
+    }
+
+    if (self->ctx == 0) {
+        PyErr_SetString(PyExc_RuntimeError, "self->ctx is NULL");
+        return NULL;
+    }
+
+    if (!PyTuple_Check(args)) {
+        PyErr_SetNone(PyExc_ValueError);
+        return NULL;
+    }
+
+    int result = 0;
+
+    uint32_t nr = PyTuple_Size(args);
+
+    PyObject* obj;
+    AIOOperation* op;
+
+    struct iocb** iocbpp = PyMem_Calloc(nr, sizeof(struct iocb*));
+    uint32_t i;
+
+    for (i=0; i < nr; i++) {
+        obj = PyTuple_GetItem(args, i);
+        if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
+            PyErr_Format(
+                PyExc_TypeError,
+                "Wrong type for argument %d -> %r", i, obj
+            );
+            PyMem_Free(iocbpp);
+            return NULL;
+        }
+
+        op = (AIOOperation*) obj;
+
+        op->context = self;
+        Py_INCREF(self);
+
+        Py_INCREF(op);
+
+        op->iocb.aio_flags |= IOCB_FLAG_RESFD;
+        op->iocb.aio_resfd = self->fileno;
+
+        iocbpp[i] = &op->iocb;
+    }
+
+    result = io_cancel(self->ctx, nr, iocbpp);
+
+    if (result < 0) {
+        PyErr_SetFromErrno(PyExc_SystemError);
+        PyMem_Free(iocbpp);
         return NULL;
     }
 
@@ -332,6 +401,11 @@ static PyMethodDef AIOContext_methods[] = {
         "submit",
         (PyCFunction) AIOContext_submit, METH_VARARGS,
         AIOContext_submit_docstring
+    },
+    {
+        "cancel",
+        (PyCFunction) AIOContext_cancel, METH_VARARGS,
+        AIOContext_cancel_docstring
     },
     {
         "process_events",

@@ -16,47 +16,10 @@ class AsyncioContextBase(abc.ABC):
     OPERATION_CLASS = None  # type: OperationType
 
     def __init__(self, max_requests=None, loop=None, **kwargs):
+        max_requests = max_requests or self.MAX_REQUESTS_DEFAULT
         self.loop = loop or asyncio.get_event_loop()
-        self.semaphore = asyncio.BoundedSemaphore(
-            max_requests or self.MAX_REQUESTS_DEFAULT,
-        )
-        self.context = self._create_context(
-            max_requests or self.MAX_REQUESTS_DEFAULT, **kwargs
-        )
-
-        self.operations_queue = asyncio.Queue()
-        self._runner_task = self.loop.create_task(self._run())
-
-    async def _run(self):
-        def step(first_operation, first_future):
-            operations = {first_operation: first_future}
-
-            while True:
-                try:
-                    operation, future = self.operations_queue.get_nowait()
-                    operations[operation] = future
-                except asyncio.QueueEmpty:
-                    break
-
-            try:
-                # Fast call
-                self.context.submit(*operations.keys())
-            except Exception:
-                # Fallback
-                for operation, future in operations.items():
-                    try:
-                        self.context.submit(operation)
-                    except Exception as e:
-                        future.set_exception(e)
-
-        while self.loop.is_running():
-            try:
-                operation, future = await self.operations_queue.get()
-                step(operation, future)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                continue
+        self.semaphore = asyncio.BoundedSemaphore(max_requests)
+        self.context = self._create_context(max_requests, **kwargs)
 
     def _create_context(self, max_requests, **kwargs):
         return self.CONTEXT_CLASS(max_requests=max_requests, **kwargs)
@@ -71,8 +34,6 @@ class AsyncioContextBase(abc.ABC):
         self.close()
 
     def close(self):
-        if not self.loop.is_closed():
-            self._runner_task.cancel()
         self._destroy_context()
 
     async def submit(self, op):
@@ -83,8 +44,12 @@ class AsyncioContextBase(abc.ABC):
         op.set_callback(partial(self._on_done, future))
 
         async with self.semaphore:
-            await self.operations_queue.put((op, future))
-            await future
+            self.context.submit(op)
+            try:
+                await future
+            except asyncio.CancelledError:
+                self.context.cancel(op)
+                raise
             return op.get_value()
 
     def _on_done(self, future, result):
@@ -92,6 +57,10 @@ class AsyncioContextBase(abc.ABC):
         In general case impossible predict current thread and the thread
         of event loop. So have to use `call_soon_threadsave` the result setter.
         """
+
+        if future.done():
+            return
+
         self.loop.call_soon_threadsafe(future.set_result, True)
 
     def read(

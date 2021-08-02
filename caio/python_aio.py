@@ -129,6 +129,16 @@ class Context(AbstractContext):
 
         return count
 
+    def cancel(self, *aio_operations) -> int:
+        """
+        Cancels multiple Operations. Returns
+
+         Operation.cancel(aio_op1, aio_op2, aio_opN, ...) -> int
+
+        (Always returns zero, this method exists for compatibility reasons)
+        """
+        return 0
+
     def close(self):
         if self._closed:
             return
