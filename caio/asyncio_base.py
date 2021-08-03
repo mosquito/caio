@@ -44,11 +44,14 @@ class AsyncioContextBase(abc.ABC):
         op.set_callback(partial(self._on_done, future))
 
         async with self.semaphore:
-            self.context.submit(op)
+            assert self.context.submit(op) == 1, "Operation was not submitted"
             try:
                 await future
             except asyncio.CancelledError:
-                self.context.cancel(op)
+                try:
+                    self.context.cancel(op)
+                except ValueError:
+                    pass
                 raise
             return op.get_value()
 
