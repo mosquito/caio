@@ -42,8 +42,8 @@ async def test_bad_file_descritor(tmp_path, async_context_maker):
         with open(str(tmp_path / "temp.bin"), "wb+") as fp:
             fd = fp.fileno()
 
-        with pytest.raises((SystemError, OSError, AssertionError)):
+        with pytest.raises((SystemError, OSError, AssertionError, ValueError)):
             assert await context.read(1, fd, 0) == b""
 
-        with pytest.raises((SystemError, OSError, AssertionError)):
+        with pytest.raises((SystemError, OSError, AssertionError, ValueError)):
             assert await context.write(b"hello", fd, 0)
