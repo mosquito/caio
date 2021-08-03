@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <linux/aio_abi.h>
 #include <linux/fs.h>
 #include <stdio.h>
@@ -16,24 +17,108 @@ static const unsigned CTX_MAX_REQUESTS_DEFAULT = 32;
 static const unsigned EV_MAX_REQUESTS_DEFAULT = 512;
 static int kernel_support = -1;
 
-inline int io_setup(unsigned nr, aio_context_t *ctxp) {
+inline static int io_setup(unsigned nr, aio_context_t *ctxp) {
     return syscall(__NR_io_setup, nr, ctxp);
 }
 
 
-inline int io_destroy(aio_context_t ctx) {
+inline static int io_destroy(aio_context_t ctx) {
     return syscall(__NR_io_destroy, ctx);
 }
 
 
-inline int io_getevents(aio_context_t ctx, long min_nr, long max_nr,
-        struct io_event *events, struct timespec *timeout) {
+inline static int io_getevents(
+    aio_context_t ctx, long min_nr, long max_nr,
+    struct io_event *events, struct timespec *timeout
+) {
     return syscall(__NR_io_getevents, ctx, min_nr, max_nr, events, timeout);
 }
 
 
-inline int io_submit(aio_context_t ctx, long nr, struct iocb **iocbpp) {
+inline static int io_submit(aio_context_t ctx, long nr, struct iocb **iocbpp) {
     return syscall(__NR_io_submit, ctx, nr, iocbpp);
+}
+
+inline static long io_cancel(aio_context_t ctx, struct iocb *aiocb, struct io_event *res) {
+    return syscall(__NR_io_cancel, ctx, aiocb, res);
+}
+
+
+inline int io_cancel_error(int result) {
+    if (result == 0) return result;
+
+    switch (errno) {
+        case EAGAIN:
+            PyErr_SetString(
+                PyExc_SystemError,
+                "Specified operation was not canceled [EAGAIN]"
+            );
+            break;
+        case EFAULT:
+            PyErr_SetString(
+                PyExc_RuntimeError,
+                "One of the data structures points to invalid data [EFAULT]"
+            );
+            break;
+        case EINVAL:
+            PyErr_SetString(
+                PyExc_ValueError,
+                "The AIO context specified by ctx_id is invalid [EINVAL]"
+            );
+            break;
+        case ENOSYS:
+            PyErr_SetString(
+                PyExc_NotImplementedError,
+                "io_cancel() is not implemented on this architecture [ENOSYS]"
+            );
+            break;
+        default:
+            PyErr_SetFromErrno(PyExc_SystemError);
+            break;
+    }
+
+    return result;
+}
+
+
+inline int io_submit_error(int result) {
+    if (result >= 0) return result;
+
+    switch (errno) {
+        case EAGAIN:
+            PyErr_SetString(
+                PyExc_OverflowError,
+                "Insufficient resources are available to queue any iocbs [EAGAIN]"
+            );
+            break;
+        case EBADF:
+            PyErr_SetString(
+                PyExc_ValueError,
+                "The file descriptor specified in the first iocb is invalid [EBADF]"
+            );
+            break;
+        case EFAULT:
+            PyErr_SetString(
+                PyExc_ValueError,
+                "One of the data structures points to invalid data [EFAULT]"
+            );
+            break;
+        case EINVAL:
+            PyErr_SetString(
+                PyExc_ValueError,
+                "The AIO context specified by ctx_id is invalid. nr is less "
+                "than 0. The iocb at *iocbpp[0] is not properly initialized, "
+                "the operation specified is invalid for the file descriptor in "
+                "the iocb, or the value in the aio_reqprio field is invalid. "
+                "[EINVAL]"
+            );
+            break;
+        default:
+            PyErr_SetFromErrno(PyExc_SystemError);
+            break;
+    }
+
+    return result;
 }
 
 
@@ -187,8 +272,7 @@ static PyObject* AIOContext_submit(AIOContext *self, PyObject *args) {
 
     result = io_submit(self->ctx, nr, iocbpp);
 
-    if (result < 0) {
-        PyErr_SetFromErrno(PyExc_SystemError);
+    if (io_submit_error(result) < 0) {
         PyMem_Free(iocbpp);
         return NULL;
     }
@@ -203,7 +287,7 @@ PyDoc_STRVAR(AIOContext_cancel_docstring,
     "Cancels multiple Operations. Returns \n\n"
     "    Operation.cancel(aio_op1, aio_op2, aio_opN, ...) -> int"
 );
-static PyObject* AIOContext_cancel(AIOContext *self, PyObject *args) {
+static PyObject* AIOContext_cancel(AIOContext *self, PyObject *args, PyObject *kwds) {
     if (self == 0) {
         PyErr_SetString(PyExc_RuntimeError, "self is NULL");
         return NULL;
@@ -214,56 +298,35 @@ static PyObject* AIOContext_cancel(AIOContext *self, PyObject *args) {
         return NULL;
     }
 
-    if (!PyTuple_Check(args)) {
-        PyErr_SetNone(PyExc_ValueError);
+    static char *kwlist[] = {"operation", NULL};
+
+    AIOOperation* op = NULL;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", kwlist, &op)) return NULL;
+    if (PyObject_TypeCheck(op, AIOOperationTypeP) == 0) {
+        PyErr_Format(PyExc_TypeError, "Operation required not %r", op);
         return NULL;
     }
 
-    int result = 0;
+    struct io_event ev;
 
-    uint32_t nr = PyTuple_Size(args);
+    if (io_cancel_error(io_cancel(self->ctx, &op->iocb, &ev))) {
+        return NULL;
+    }
 
-    PyObject* obj;
-    AIOOperation* op;
+    if (ev.res >= 0) {
+        op->iocb.aio_nbytes = ev.res;
+    } else {
+        op->error = -ev.res;
+    }
 
-    struct iocb** iocbpp = PyMem_Calloc(nr, sizeof(struct iocb*));
-    uint32_t i;
-
-    for (i=0; i < nr; i++) {
-        obj = PyTuple_GetItem(args, i);
-        if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
-            PyErr_Format(
-                PyExc_TypeError,
-                "Wrong type for argument %d -> %r", i, obj
-            );
-            PyMem_Free(iocbpp);
+    if (op->callback != NULL) {
+        if (PyObject_CallFunction(op->callback, "K", ev.res) == NULL) {
             return NULL;
-        }
-
-        op = (AIOOperation*) obj;
-
-        op->context = self;
-        Py_INCREF(self);
-
-        Py_INCREF(op);
-
-        op->iocb.aio_flags |= IOCB_FLAG_RESFD;
-        op->iocb.aio_resfd = self->fileno;
-
-        iocbpp[i] = &op->iocb;
+       }
     }
 
-    result = io_cancel(self->ctx, nr, iocbpp);
-
-    if (result < 0) {
-        PyErr_SetFromErrno(PyExc_SystemError);
-        PyMem_Free(iocbpp);
-        return NULL;
-    }
-
-    PyMem_Free(iocbpp);
-
-    return (PyObject*) PyLong_FromSsize_t(result);
+    return (PyObject*) PyLong_FromSsize_t(ev.res);
 }
 
 PyDoc_STRVAR(AIOContext_process_events_docstring,
@@ -404,7 +467,7 @@ static PyMethodDef AIOContext_methods[] = {
     },
     {
         "cancel",
-        (PyCFunction) AIOContext_cancel, METH_VARARGS,
+        (PyCFunction) AIOContext_cancel, METH_VARARGS | METH_KEYWORDS,
         AIOContext_cancel_docstring
     },
     {
