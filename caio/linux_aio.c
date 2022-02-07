@@ -964,6 +964,25 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
         return NULL;
     }
 
+    aio_context_t temp_ctx;
+    if (io_setup(1, &temp_ctx) < 0) {
+        PyErr_Format(
+            PyExc_ImportError,
+            "Error on io_setup with code %d",
+            errno
+        );
+        return NULL;
+    }
+
+    if (io_destroy(temp_ctx)) {
+        PyErr_Format(
+            PyExc_ImportError,
+            "Error on io_destroy with code %d",
+            errno
+        );
+        return NULL;
+    }
+
     AIOContextTypeP = &AIOContextType;
     AIOOperationTypeP = &AIOOperationType;
 
