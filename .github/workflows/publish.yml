@@ -54,6 +54,8 @@ jobs:
             os: macos-latest
           - python: '3.9'
             os: macos-latest
+          - python: '3.10'
+            os: macos-latest
           # Windows
           - python: '3.6'
             os: windows-latest
