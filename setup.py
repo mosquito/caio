@@ -75,7 +75,7 @@ setup(
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: Implementation :: CPython",
     ],
-    python_requires=">=3.5.*, <4",
+    python_requires=">=3.5, <4",
     extras_require={
         "develop": [
             "aiomisc",
