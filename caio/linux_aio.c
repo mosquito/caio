@@ -964,7 +964,7 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
         return NULL;
     }
 
-    aio_context_t temp_ctx;
+    aio_context_t temp_ctx = 0;
     if (io_setup(1, &temp_ctx) < 0) {
         PyErr_Format(
             PyExc_ImportError,
