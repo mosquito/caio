@@ -1,5 +1,7 @@
 import asyncio
 import hashlib
+import os
+from unittest.mock import Mock
 
 import aiomisc
 import pytest
@@ -47,3 +49,40 @@ async def test_bad_file_descritor(tmp_path, async_context_maker):
 
         with pytest.raises((SystemError, OSError, AssertionError, ValueError)):
             assert await context.write(b"hello", fd, 0)
+
+
+@pytest.fixture
+async def asyncio_exception_handler(loop):
+    handler = Mock(
+        side_effect=lambda _loop, ctx: _loop.default_exception_handler(ctx)
+    )
+    current_handler = loop.get_exception_handler()
+    loop.set_exception_handler(handler=handler)
+    yield handler
+    loop.set_exception_handler(current_handler)
+
+
+@aiomisc.timeout(3)
+async def test_operations_cancel_cleanly(
+    tmp_path, async_context_maker, asyncio_exception_handler
+):
+    async with async_context_maker() as context:
+        with open(str(tmp_path / "temp.bin"), "wb+") as fp:
+            fd = fp.fileno()
+
+            await context.write(b"\x00", fd, 1024**2 - 1)
+            assert os.stat(fd).st_size == 1024**2
+
+            for _ in range(50):
+                reads = [
+                    asyncio.create_task(context.read(2**16, fd, 2**16 * i))
+                    for i in range(16)
+                ]
+                _, pending = await asyncio.wait(
+                    reads, return_when=asyncio.FIRST_COMPLETED
+                )
+                for read in pending:
+                    read.cancel()
+                if pending:
+                    await asyncio.wait(pending)
+                asyncio_exception_handler.assert_not_called()
