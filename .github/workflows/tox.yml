@@ -44,6 +44,7 @@ jobs:
           - py38
           - py39
           - py310
+          - py311
 
     steps:
       - uses: actions/checkout@v2
@@ -63,10 +64,11 @@ jobs:
 
       matrix:
         python-versions:
-          - 3.7
-          - 3.8
-          - 3.9
+          - "3.7"
+          - "3.8"
+          - "3.9"
           - "3.10"
+          - "3.11"
 
     needs: lint
     runs-on: windows-latest
