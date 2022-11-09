@@ -7,26 +7,28 @@ from .version import __author__, __version__
 
 
 try:
-    from . import linux_aio
-    from . import linux_aio_asyncio
+    from . import linux_aio, linux_aio_asyncio
 except ImportError:
     linux_aio = None            # type: ignore
     linux_aio_asyncio = None    # type: ignore
 
 try:
-    from . import thread_aio
-    from . import thread_aio_asyncio
+    from . import thread_aio, thread_aio_asyncio
 except ImportError:
     thread_aio = None           # type: ignore
     thread_aio_asyncio = None   # type: ignore
 
 
 variants = tuple(filter(None, [linux_aio, thread_aio, python_aio]))
-variants_asyncio = tuple(filter(None, [
-    linux_aio_asyncio,
-    thread_aio_asyncio,
-    python_aio_asyncio
-]))
+variants_asyncio = tuple(
+    filter(
+        None, [
+            linux_aio_asyncio,
+            thread_aio_asyncio,
+            python_aio_asyncio,
+        ],
+    ),
+)
 
 preferred = variants[0]
 preferred_asyncio = variants_asyncio[0]
@@ -45,7 +47,7 @@ def __select_implementation():
     implementations = {k: v for k, v in implementations.items() if all(v)}
 
     default_implementation = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "default_implementation"
+        os.path.dirname(os.path.abspath(__file__)), "default_implementation",
     )
 
     requested = os.getenv("CAIO_IMPL")
@@ -65,7 +67,7 @@ def __select_implementation():
             "CAIO_IMPL contains unsupported value %r. Use one of %r" % (
                 requested, tuple(implementations),
             ),
-            RuntimeWarning
+            RuntimeWarning,
         )
         return
 

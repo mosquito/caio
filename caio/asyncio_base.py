@@ -44,7 +44,9 @@ class AsyncioContextBase(abc.ABC):
         op.set_callback(partial(self._on_done, future))
 
         async with self.semaphore:
-            assert self.context.submit(op) == 1, "Operation was not submitted"
+            if self.context.submit(op) != 1:
+                raise IOError("Operation was not submitted")
+
             try:
                 await future
             except asyncio.CancelledError:
@@ -65,7 +67,7 @@ class AsyncioContextBase(abc.ABC):
             return
 
         self.loop.call_soon_threadsafe(
-            lambda: future.done() or future.set_result(True)
+            lambda: future.done() or future.set_result(True),
         )
 
     def read(
