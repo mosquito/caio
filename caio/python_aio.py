@@ -3,7 +3,7 @@ from collections import defaultdict
 from enum import IntEnum, unique
 from io import BytesIO
 from multiprocessing.pool import ThreadPool
-from threading import RLock, Lock
+from threading import Lock, RLock
 from types import MappingProxyType
 from typing import Any, Callable, Optional, Union
 
@@ -63,15 +63,15 @@ class Context(AbstractContext):
 
         if self._in_progress > self.__max_requests:
             raise RuntimeError(
-                "Maximum simultaneous requests have been reached"
+                "Maximum simultaneous requests have been reached",
             )
 
         self._in_progress += 1
 
         self.pool.apply_async(
-            handler, args=(self, operation,),
+            handler, args=(self, operation),
             callback=on_success,
-            error_callback=on_error
+            error_callback=on_error,
         )
 
     if NATIVE_PREAD_PWRITE:
@@ -174,8 +174,8 @@ class Operation(AbstractOperation):
         nbytes: Optional[int],
         offset: Optional[int],
         opcode: OpCode,
-        payload: bytes = None,
-        priority: int = None,
+        payload: Optional[bytes] = None,
+        priority: Optional[int] = None,
     ):
         self.callback = None    # type: Optional[Callable[[int], Any]]
         self.buffer = BytesIO()

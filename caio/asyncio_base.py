@@ -67,7 +67,7 @@ class AsyncioContextBase(abc.ABC):
             return
 
         self.loop.call_soon_threadsafe(
-            lambda: future.done() or future.set_result(True)
+            lambda: future.done() or future.set_result(True),
         )
 
     def read(
