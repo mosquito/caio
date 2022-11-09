@@ -27,8 +27,11 @@ class Context(AbstractContext):
     """
     python aio context implementation
     """
+
+    MAX_POOL_SIZE = 128
+
     def __init__(self, max_requests: int = 32, pool_size: int = 8):
-        assert pool_size < 128
+        assert pool_size < self.MAX_POOL_SIZE
 
         self.__max_requests = max_requests
         self.pool = ThreadPool(pool_size)
