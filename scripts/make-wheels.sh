@@ -13,7 +13,7 @@ build_wheel cp310-cp310
 build_wheel cp311-cp311
 
 cd dist
+
 for f in ./*linux_*;
 do if [ -f $f ]; then auditwheel repair $f -w . ; rm $f; fi;
 done
-cd -
