@@ -2,6 +2,8 @@ set -ex
 
 mkdir -p dist
 
+MACHINE=$(/opt/python/cp311-cp311/bin/python3 -c 'import platform; print(platform.machine())')
+
 function build_wheel() {
 	/opt/python/$1/bin/pip wheel . -f . -w dist
 }
@@ -14,6 +16,6 @@ build_wheel cp311-cp311
 
 cd dist
 
-for f in ./*linux_*;
+for f in ./*-linux*_${MACHINE}*;
 do if [ -f $f ]; then auditwheel repair $f -w . ; rm $f; fi;
 done

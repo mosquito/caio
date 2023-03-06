@@ -15,7 +15,6 @@ linux_wheel:
 	docker run -it --rm \
 		-v `pwd`:/mnt \
 		--entrypoint /bin/bash \
-		--platform linux/arm64 \
 		--workdir /mnt \
 		--platform linux/amd64 \
 		quay.io/pypa/manylinux2014_x86_64 \
