@@ -79,7 +79,7 @@ setup(
     python_requires=">=3.7, <4",
     extras_require={
         "develop": [
-            "aiomisc",
+            "aiomisc-pytest",
             "pytest",
             "pytest-cov",
         ],
