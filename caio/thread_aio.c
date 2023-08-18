@@ -579,6 +579,8 @@ static PyObject* AIOOperation_fsync(
 
     if (!argIsOk) return NULL;
 
+    self->opcode = THAIO_FSYNC;
+
 	return (PyObject*) self;
 }
 
