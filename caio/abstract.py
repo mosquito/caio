@@ -4,12 +4,15 @@ from typing import Any, Callable, Optional, Union
 
 class AbstractContext(abc.ABC):
     @property
+    @abc.abstractmethod
     def max_requests(self) -> int:
         raise NotImplementedError
 
+    @abc.abstractmethod
     def submit(self, *aio_operations) -> int:
         raise NotImplementedError(aio_operations)
 
+    @abc.abstractmethod
     def cancel(self, *aio_operations) -> int:
         raise NotImplementedError(aio_operations)
 
