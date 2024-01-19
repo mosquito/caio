@@ -94,20 +94,27 @@ than to disk I/O performance.
 
 #### Read time vs Chunk size
 
-|![caio.linux_aio_asyncio read time vs chunk_size](graphs/caio.linux_aio_asyncio_read_time_chunk_size.svg)|![caio.python_aio_asyncio read time vs chunk_size](graphs/caio.python_aio_asyncio_read_time_chunk_size.svg)|![caio.thread_aio_asyncio read time vs chunk_size](graphs/caio.thread_aio_asyncio_read_time_chunk_size.svg)|
-|-----------|------------|------------|
+![caio.linux_aio_asyncio read time vs chunk_size](graphs/caio.linux_aio_asyncio_read_time_chunk_size.svg)
+![caio.python_aio_asyncio read time vs chunk_size](graphs/caio.python_aio_asyncio_read_time_chunk_size.svg)
+![caio.thread_aio_asyncio read time vs chunk_size](graphs/caio.thread_aio_asyncio_read_time_chunk_size.svg)
+
 
 #### Read time vs concurrency
 
-|![caio.linux_aio_asyncio read time vs concurrency](graphs/caio.linux_aio_asyncio_read_time_concurrency.svg)|![caio. python_aio_asyncio read time vs concurrency](graphs/caio.python_aio_asyncio_read_time_concurrency.svg)|![caio.thread_aio_asyncio read time vs concurrency](graphs/caio.thread_aio_asyncio_read_time_concurrency.svg)|
-|-----------|------------|------------|
+![caio.linux_aio_asyncio read time vs concurrency](graphs/caio.linux_aio_asyncio_read_time_concurrency.svg)
+![caio. python_aio_asyncio read time vs concurrency](graphs/caio.python_aio_asyncio_read_time_concurrency.svg)
+![caio.thread_aio_asyncio read time vs concurrency](graphs/caio.thread_aio_asyncio_read_time_concurrency.svg)
+
 
 #### Write time vs Chunk size
 
-|![caio.linux_aio_asyncio write time vs chunk_size](graphs/caio.linux_aio_asyncio_write_time_chunk_size.svg)|![caio.python_aio_asyncio write time vs chunk_size](graphs/caio.python_aio_asyncio_write_time_chunk_size.svg)|![caio.thread_aio_asyncio write time vs chunk_size](graphs/caio.thread_aio_asyncio_write_time_chunk_size.svg)|
-|-----------|------------|------------|
+![caio.linux_aio_asyncio write time vs chunk_size](graphs/caio.linux_aio_asyncio_write_time_chunk_size.svg)
+![caio.python_aio_asyncio write time vs chunk_size](graphs/caio.python_aio_asyncio_write_time_chunk_size.svg)
+![caio.thread_aio_asyncio write time vs chunk_size](graphs/caio.thread_aio_asyncio_write_time_chunk_size.svg)
+
 
 #### Write time vs Concurrency
 
-|![caio.linux_aio_asyncio write time vs concurrency](graphs/caio.linux_aio_asyncio_write_time_concurrency.svg)|![caio.python_aio_asyncio write time vs concurrency](graphs/caio.python_aio_asyncio_write_time_concurrency.svg)|![caio.thread_aio_asyncio write time vs concurrency](graphs/caio.thread_aio_asyncio_write_time_concurrency.svg)|
-|-----------|------------|------------|
+![caio.linux_aio_asyncio write time vs concurrency](graphs/caio.linux_aio_asyncio_write_time_concurrency.svg)
+![caio.python_aio_asyncio write time vs concurrency](graphs/caio.python_aio_asyncio_write_time_concurrency.svg)
+![caio.thread_aio_asyncio write time vs concurrency](graphs/caio.thread_aio_asyncio_write_time_concurrency.svg)
