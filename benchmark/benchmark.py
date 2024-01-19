@@ -1,8 +1,10 @@
+import argparse
 import asyncio
 import csv
 import logging
 import os
 import sys
+import tempfile
 from contextlib import suppress
 from itertools import product
 from pathlib import Path
@@ -32,7 +34,11 @@ T = TypeVar("T")
 CONSOLE = Console(file=sys.stderr)
 
 
-async def test(context_class: Type[AsyncioContextBase], results):
+parser = argparse.ArgumentParser()
+parser.add_argument("--directory", default=tempfile.tempdir)
+
+
+async def test(context_class: Type[AsyncioContextBase], directory, results):
     file_size = 256 * (1024**2)
     concurrences = list(range(1, 5000, 200))[::-1]
     max_ops = [1, 4, 8, 16, 32, 64]
@@ -46,7 +52,7 @@ async def test(context_class: Type[AsyncioContextBase], results):
             description=f"Benchmarking {impl}",
         ):
             async with context_class(64) as context:
-                with TemporaryDirectory() as dirname:
+                with TemporaryDirectory(dir=directory) as dirname:
                     path = Path(dirname)
 
                     with open(path / "test.bin", "ab+") as fp:
@@ -92,6 +98,7 @@ async def test(context_class: Type[AsyncioContextBase], results):
 
 
 def main():
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     results = csv.writer(sys.stdout, dialect="excel")
     results.writerow([
@@ -100,7 +107,7 @@ def main():
 
     for context in CONTEXTS:
         print(f"Benchmarking {context!r}", file=sys.stderr)
-        asyncio.run(test(context, results))
+        asyncio.run(test(context, args.directory, results))
 
 
 if __name__ == "__main__":

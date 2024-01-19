@@ -68,9 +68,22 @@ The script is particularly useful for developers and system administrators looki
 that heavily rely on file I/O operations, providing them with data to make informed decisions about the most
 appropriate AsyncIO context to use.
 
+## Running benchmark
+
+```shell
+cd benchmark
+pip install -r requirements.txt
+
+# Run benchmark
+python benchmark.py --directory /tmp > results.csv
+
+# Render graphs
+python graph.py results.csv
+```
+
 ## Results
 
-### Testing Environment
+### Testing Environment `MacBook M1` / `Linux VM` / `tmpfs`
 
 The benchmarking was conducted on a MacBook with an M1 CPU. In an ARM Linux Virtual Machine.
 
@@ -84,37 +97,84 @@ than to disk I/O performance.
 
 #### Execution Time Distribution
 
-![execution time distribution](graphs/execution_time_distribution.svg)
-![density_plot.svg](graphs/density_plot.svg)
+![execution time distribution](graphs/m1-tmpfs/execution_time_distribution.svg)
+![density_plot.svg](graphs/m1-tmpfs/density_plot.svg)
 
 #### Boxplot of Time across Implementations and Operations
 
-![boxplot_time.svg](graphs/boxplot_time.svg)
+![boxplot_time.svg](graphs/m1-tmpfs/boxplot_time.svg)
 
 
 #### Read time vs Chunk size
 
-![caio.linux_aio_asyncio read time vs chunk_size](graphs/caio.linux_aio_asyncio_read_time_chunk_size.svg)
-![caio.python_aio_asyncio read time vs chunk_size](graphs/caio.python_aio_asyncio_read_time_chunk_size.svg)
-![caio.thread_aio_asyncio read time vs chunk_size](graphs/caio.thread_aio_asyncio_read_time_chunk_size.svg)
+![caio.linux_aio_asyncio read time vs chunk_size](graphs/m1-tmpfs/caio.linux_aio_asyncio_read_time_chunk_size.svg)
+![caio.python_aio_asyncio read time vs chunk_size](graphs/m1-tmpfs/caio.python_aio_asyncio_read_time_chunk_size.svg)
+![caio.thread_aio_asyncio read time vs chunk_size](graphs/m1-tmpfs/caio.thread_aio_asyncio_read_time_chunk_size.svg)
 
 
 #### Read time vs concurrency
 
-![caio.linux_aio_asyncio read time vs concurrency](graphs/caio.linux_aio_asyncio_read_time_concurrency.svg)
-![caio. python_aio_asyncio read time vs concurrency](graphs/caio.python_aio_asyncio_read_time_concurrency.svg)
-![caio.thread_aio_asyncio read time vs concurrency](graphs/caio.thread_aio_asyncio_read_time_concurrency.svg)
+![caio.linux_aio_asyncio read time vs concurrency](graphs/m1-tmpfs/caio.linux_aio_asyncio_read_time_concurrency.svg)
+![caio. python_aio_asyncio read time vs concurrency](graphs/m1-tmpfs/caio.python_aio_asyncio_read_time_concurrency.svg)
+![caio.thread_aio_asyncio read time vs concurrency](graphs/m1-tmpfs/caio.thread_aio_asyncio_read_time_concurrency.svg)
 
 
 #### Write time vs Chunk size
 
-![caio.linux_aio_asyncio write time vs chunk_size](graphs/caio.linux_aio_asyncio_write_time_chunk_size.svg)
-![caio.python_aio_asyncio write time vs chunk_size](graphs/caio.python_aio_asyncio_write_time_chunk_size.svg)
-![caio.thread_aio_asyncio write time vs chunk_size](graphs/caio.thread_aio_asyncio_write_time_chunk_size.svg)
+![caio.linux_aio_asyncio write time vs chunk_size](graphs/m1-tmpfs/caio.linux_aio_asyncio_write_time_chunk_size.svg)
+![caio.python_aio_asyncio write time vs chunk_size](graphs/m1-tmpfs/caio.python_aio_asyncio_write_time_chunk_size.svg)
+![caio.thread_aio_asyncio write time vs chunk_size](graphs/m1-tmpfs/caio.thread_aio_asyncio_write_time_chunk_size.svg)
 
 
 #### Write time vs Concurrency
 
-![caio.linux_aio_asyncio write time vs concurrency](graphs/caio.linux_aio_asyncio_write_time_concurrency.svg)
-![caio.python_aio_asyncio write time vs concurrency](graphs/caio.python_aio_asyncio_write_time_concurrency.svg)
-![caio.thread_aio_asyncio write time vs concurrency](graphs/caio.thread_aio_asyncio_write_time_concurrency.svg)
+![caio.linux_aio_asyncio write time vs concurrency](graphs/m1-tmpfs/caio.linux_aio_asyncio_write_time_concurrency.svg)
+![caio.python_aio_asyncio write time vs concurrency](graphs/m1-tmpfs/caio.python_aio_asyncio_write_time_concurrency.svg)
+![caio.thread_aio_asyncio write time vs concurrency](graphs/m1-tmpfs/caio.thread_aio_asyncio_write_time_concurrency.svg)
+
+
+### Testing Environment `MacBook M1` / `Linux VM` / `btrfs`
+
+The benchmarking was conducted on a MacBook with an M1 CPU. In an ARM Linux Virtual Machine.
+
+### Configuration Specifics
+
+For the benchmark tests, a no special configurations just run tests under `btrfs`. 
+
+#### Execution Time Distribution
+
+![execution time distribution](graphs/m1-btrfs/execution_time_distribution.svg)
+![density_plot.svg](graphs/m1-btrfs/density_plot.svg)
+
+#### Boxplot of Time across Implementations and Operations
+
+![boxplot_time.svg](graphs/m1-btrfs/boxplot_time.svg)
+
+
+#### Read time vs Chunk size
+
+![caio.linux_aio_asyncio read time vs chunk_size](graphs/m1-btrfs/caio.linux_aio_asyncio_read_time_chunk_size.svg)
+![caio.python_aio_asyncio read time vs chunk_size](graphs/m1-btrfs/caio.python_aio_asyncio_read_time_chunk_size.svg)
+![caio.thread_aio_asyncio read time vs chunk_size](graphs/m1-btrfs/caio.thread_aio_asyncio_read_time_chunk_size.svg)
+
+
+#### Read time vs concurrency
+
+![caio.linux_aio_asyncio read time vs concurrency](graphs/m1-btrfs/caio.linux_aio_asyncio_read_time_concurrency.svg)
+![caio. python_aio_asyncio read time vs concurrency](graphs/m1-btrfs/caio.python_aio_asyncio_read_time_concurrency.svg)
+![caio.thread_aio_asyncio read time vs concurrency](graphs/m1-btrfs/caio.thread_aio_asyncio_read_time_concurrency.svg)
+
+
+#### Write time vs Chunk size
+
+![caio.linux_aio_asyncio write time vs chunk_size](graphs/m1-btrfs/caio.linux_aio_asyncio_write_time_chunk_size.svg)
+![caio.python_aio_asyncio write time vs chunk_size](graphs/m1-btrfs/caio.python_aio_asyncio_write_time_chunk_size.svg)
+![caio.thread_aio_asyncio write time vs chunk_size](graphs/m1-btrfs/caio.thread_aio_asyncio_write_time_chunk_size.svg)
+
+
+#### Write time vs Concurrency
+
+![caio.linux_aio_asyncio write time vs concurrency](graphs/m1-btrfs/caio.linux_aio_asyncio_write_time_concurrency.svg)
+![caio.python_aio_asyncio write time vs concurrency](graphs/m1-btrfs/caio.python_aio_asyncio_write_time_concurrency.svg)
+![caio.thread_aio_asyncio write time vs concurrency](graphs/m1-btrfs/caio.thread_aio_asyncio_write_time_concurrency.svg)
+
