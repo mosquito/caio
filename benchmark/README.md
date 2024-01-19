@@ -178,3 +178,52 @@ For the benchmark tests, a no special configurations just run tests under `btrfs
 ![caio.python_aio_asyncio write time vs concurrency](graphs/m1-btrfs/caio.python_aio_asyncio_write_time_concurrency.svg)
 ![caio.thread_aio_asyncio write time vs concurrency](graphs/m1-btrfs/caio.thread_aio_asyncio_write_time_concurrency.svg)
 
+
+### Testing Environment `Linux on Xeon E3-1265L` / `tmpfs`
+
+The benchmarking was conducted on a Linux server with a Xeon E3-1265L CPU.
+
+### Configuration Specifics
+
+For the benchmark tests, a critical configuration was implemented: the `/tmp` directory was mounted as `tmpfs`. This 
+decision was made to specifically measure the overhead of the AsyncIO contexts. `tmpfs` is a temporary file system 
+that resides in memory, significantly reducing the latency usually associated with disk-based storage. By using 
+`tmpfs`, the benchmark aims to isolate the performance impact attributable solely to the AsyncIO contexts, rather 
+than to disk I/O performance.
+
+#### Execution Time Distribution
+
+![execution time distribution](graphs/linux-tmpfs/execution_time_distribution.svg)
+![density_plot.svg](graphs/linux-tmpfs/density_plot.svg)
+
+#### Boxplot of Time across Implementations and Operations
+
+![boxplot_time.svg](graphs/linux-tmpfs/boxplot_time.svg)
+
+
+#### Read time vs Chunk size
+
+![caio.linux_aio_asyncio read time vs chunk_size](graphs/linux-tmpfs/caio.linux_aio_asyncio_read_time_chunk_size.svg)
+![caio.python_aio_asyncio read time vs chunk_size](graphs/linux-tmpfs/caio.python_aio_asyncio_read_time_chunk_size.svg)
+![caio.thread_aio_asyncio read time vs chunk_size](graphs/linux-tmpfs/caio.thread_aio_asyncio_read_time_chunk_size.svg)
+
+
+#### Read time vs concurrency
+
+![caio.linux_aio_asyncio read time vs concurrency](graphs/linux-tmpfs/caio.linux_aio_asyncio_read_time_concurrency.svg)
+![caio. python_aio_asyncio read time vs concurrency](graphs/linux-tmpfs/caio.python_aio_asyncio_read_time_concurrency.svg)
+![caio.thread_aio_asyncio read time vs concurrency](graphs/linux-tmpfs/caio.thread_aio_asyncio_read_time_concurrency.svg)
+
+
+#### Write time vs Chunk size
+
+![caio.linux_aio_asyncio write time vs chunk_size](graphs/linux-tmpfs/caio.linux_aio_asyncio_write_time_chunk_size.svg)
+![caio.python_aio_asyncio write time vs chunk_size](graphs/linux-tmpfs/caio.python_aio_asyncio_write_time_chunk_size.svg)
+![caio.thread_aio_asyncio write time vs chunk_size](graphs/linux-tmpfs/caio.thread_aio_asyncio_write_time_chunk_size.svg)
+
+
+#### Write time vs Concurrency
+
+![caio.linux_aio_asyncio write time vs concurrency](graphs/linux-tmpfs/caio.linux_aio_asyncio_write_time_concurrency.svg)
+![caio.python_aio_asyncio write time vs concurrency](graphs/linux-tmpfs/caio.python_aio_asyncio_write_time_concurrency.svg)
+![caio.thread_aio_asyncio write time vs concurrency](graphs/linux-tmpfs/caio.thread_aio_asyncio_write_time_concurrency.svg)
