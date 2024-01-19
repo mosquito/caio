@@ -213,3 +213,45 @@ than to disk I/O performance.
 ![caio.linux_aio_asyncio write time vs concurrency](graphs/linux-tmpfs/caio.linux_aio_asyncio_write_time_concurrency.svg)
 ![caio.python_aio_asyncio write time vs concurrency](graphs/linux-tmpfs/caio.python_aio_asyncio_write_time_concurrency.svg)
 ![caio.thread_aio_asyncio write time vs concurrency](graphs/linux-tmpfs/caio.thread_aio_asyncio_write_time_concurrency.svg)
+
+
+### Testing Environment `Linux on Xeon E3-1265L` / `zfs` (`4 HDD` + `l2arc on ssd`)
+
+The benchmarking was conducted on a Linux server with a Xeon E3-1265L CPU. With 4 HDD disk array and enabled 
+zfs `l2arc` on SSD. 
+
+### Configuration Specifics
+
+For the benchmark tests, a no special configurations just run tests under `zfs` volume.
+
+#### Execution Time Distribution
+
+![execution time distribution](linux-zfs-hdd-l2arc-ssd/execution_time_distribution.svg)
+![density_plot.svg](linux-zfs-hdd-l2arc-ssd/density_plot.svg)
+
+#### Read time vs Chunk size
+
+![caio.linux_aio_asyncio read time vs chunk_size](graphs/linux-zfs-hdd-l2arc-ssd/caio.linux_aio_asyncio_read_time_chunk_size.svg)
+![caio.python_aio_asyncio read time vs chunk_size](graphs/linux-zfs-hdd-l2arc-ssd/caio.python_aio_asyncio_read_time_chunk_size.svg)
+![caio.thread_aio_asyncio read time vs chunk_size](graphs/linux-zfs-hdd-l2arc-ssd/caio.thread_aio_asyncio_read_time_chunk_size.svg)
+
+
+#### Read time vs concurrency
+
+![caio.linux_aio_asyncio read time vs concurrency](graphs/linux-zfs-hdd-l2arc-ssd/caio.linux_aio_asyncio_read_time_concurrency.svg)
+![caio. python_aio_asyncio read time vs concurrency](graphs/linux-zfs-hdd-l2arc-ssd/caio.python_aio_asyncio_read_time_concurrency.svg)
+![caio.thread_aio_asyncio read time vs concurrency](graphs/linux-zfs-hdd-l2arc-ssd/caio.thread_aio_asyncio_read_time_concurrency.svg)
+
+
+#### Write time vs Chunk size
+
+![caio.linux_aio_asyncio write time vs chunk_size](graphs/linux-zfs-hdd-l2arc-ssd/caio.linux_aio_asyncio_write_time_chunk_size.svg)
+![caio.python_aio_asyncio write time vs chunk_size](graphs/linux-zfs-hdd-l2arc-ssd/caio.python_aio_asyncio_write_time_chunk_size.svg)
+![caio.thread_aio_asyncio write time vs chunk_size](graphs/linux-zfs-hdd-l2arc-ssd/caio.thread_aio_asyncio_write_time_chunk_size.svg)
+
+
+#### Write time vs Concurrency
+
+![caio.linux_aio_asyncio write time vs concurrency](graphs/linux-zfs-hdd-l2arc-ssd/caio.linux_aio_asyncio_write_time_concurrency.svg)
+![caio.python_aio_asyncio write time vs concurrency](graphs/linux-zfs-hdd-l2arc-ssd/caio.python_aio_asyncio_write_time_concurrency.svg)
+![caio.thread_aio_asyncio write time vs concurrency](graphs/linux-zfs-hdd-l2arc-ssd/linux-tmpfs/caio.thread_aio_asyncio_write_time_concurrency.svg)
