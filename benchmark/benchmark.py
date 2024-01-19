@@ -16,6 +16,7 @@ from rich.progress import Progress
 from caio.asyncio_base import AsyncioContextBase
 from caio.python_aio_asyncio import AsyncioContext as PythonAsyncioContext
 
+
 CONTEXTS = [PythonAsyncioContext]
 
 with suppress(ImportError):
@@ -42,7 +43,7 @@ async def test(context_class: Type[AsyncioContextBase], results):
     with Progress(console=CONSOLE) as progress:
         for concurrency, chunk_size, ops in progress.track(
             list(product(concurrences, chunk_size, max_ops)),
-            description=f'Benchmarking {impl}'
+            description=f"Benchmarking {impl}",
         ):
             async with context_class(64) as context:
                 with TemporaryDirectory() as dirname:
@@ -82,19 +83,19 @@ async def test(context_class: Type[AsyncioContextBase], results):
                             await asyncio.gather(*tasks)
                         except Exception as e:
                             results.writerow([
-                                impl, "read", delta + perf_counter_ns(), chunk, concurrency, ops, False, str(e)
+                                impl, "read", delta + perf_counter_ns(), chunk, concurrency, ops, False, str(e),
                             ])
                         else:
                             results.writerow([
-                                impl, "read", delta + perf_counter_ns(), chunk, concurrency, ops, True, None
+                                impl, "read", delta + perf_counter_ns(), chunk, concurrency, ops, True, None,
                             ])
 
 
 def main():
     logging.basicConfig(level=logging.INFO)
-    results = csv.writer(sys.stdout, dialect='excel')
+    results = csv.writer(sys.stdout, dialect="excel")
     results.writerow([
-        "implementation", "operation", "time", "chunk_size", "concurrency", "max_ops", "success", "exception"
+        "implementation", "operation", "time", "chunk_size", "concurrency", "max_ops", "success", "exception",
     ])
 
     for context in CONTEXTS:

@@ -82,6 +82,16 @@ that resides in memory, significantly reducing the latency usually associated wi
 `tmpfs`, the benchmark aims to isolate the performance impact attributable solely to the AsyncIO contexts, rather 
 than to disk I/O performance.
 
+#### Execution Time Distribution
+
+![execution time distribution](graphs/execution_time_distribution.svg)
+![density_plot.svg](graphs/density_plot.svg)
+
+#### Boxplot of Time across Implementations and Operations
+
+![boxplot_time.svg](graphs/boxplot_time.svg)
+
+
 #### Read time vs Chunk size
 
 |![caio.linux_aio_asyncio read time vs chunk_size](graphs/caio.linux_aio_asyncio_read_time_chunk_size.svg)|![caio.python_aio_asyncio read time vs chunk_size](graphs/caio.python_aio_asyncio_read_time_chunk_size.svg)|![caio.thread_aio_asyncio read time vs chunk_size](graphs/caio.thread_aio_asyncio_read_time_chunk_size.svg)|

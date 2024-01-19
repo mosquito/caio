@@ -1,5 +1,6 @@
-rich
-numpy
 matplotlib
+numpy
 pandas
+rich
 scipy
+seaborn
