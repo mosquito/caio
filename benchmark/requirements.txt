@@ -1,0 +1,5 @@
+rich
+numpy
+matplotlib
+pandas
+scipy

@@ -803,7 +803,7 @@ static PyModuleDef thread_aio_module = {
 
 
 PyMODINIT_FUNC PyInit_thread_aio(void) {
-    PyEval_InitThreads();
+    Py_Initialize();
 
     PyObject *m;
 

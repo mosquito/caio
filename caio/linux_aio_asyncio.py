@@ -1,3 +1,5 @@
+import asyncio
+
 from .asyncio_base import AsyncioContextBase
 from .linux_aio import Context, Operation
 
@@ -5,6 +7,7 @@ from .linux_aio import Context, Operation
 class AsyncioContext(AsyncioContextBase):
     OPERATION_CLASS = Operation
     CONTEXT_CLASS = Context
+    operations: asyncio.Queue
 
     def _create_context(self, max_requests):
         context = super()._create_context(max_requests)
@@ -24,5 +27,7 @@ class AsyncioContext(AsyncioContextBase):
         self.loop.remove_reader(self.context.fileno)
 
     def _on_read_event(self):
-        self.context.poll()
-        self.context.process_events()
+        result = self.context.poll()
+        if result <= 0:
+            return
+        self.context.process_events(result)

@@ -76,20 +76,22 @@ class Context(AbstractContext):
 
     if NATIVE_PREAD_PWRITE:
         def __pread(self, fd, size, offset):
-            return os.pread(fd, size, offset)
+            try:
+                return os.pread(fd, size, offset)
+            except OSError as e:
+                print(e.args)
+                raise
 
         def __pwrite(self, fd, bytes, offset):
             return os.pwrite(fd, bytes, offset)
     else:
         def __pread(self, fd, size, offset):
             with self._locks[fd]:
-                os.lseek(fd, 0, os.SEEK_SET)
                 os.lseek(fd, offset, os.SEEK_SET)
                 return os.read(fd, size)
 
         def __pwrite(self, fd, bytes, offset):
             with self._locks[fd]:
-                os.lseek(fd, 0, os.SEEK_SET)
                 os.lseek(fd, offset, os.SEEK_SET)
                 return os.write(fd, bytes)
 

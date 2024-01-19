@@ -244,9 +244,8 @@ static PyObject* AIOContext_submit(AIOContext *self, PyObject *args) {
     AIOOperation* op;
 
     struct iocb** iocbpp = PyMem_Calloc(nr, sizeof(struct iocb*));
-    uint32_t i;
 
-    for (i=0; i < nr; i++) {
+    for (uint32_t i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
         if (PyObject_TypeCheck(obj, AIOOperationTypeP) == 0) {
             PyErr_Format(
