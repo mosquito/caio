@@ -226,8 +226,8 @@ For the benchmark tests, a no special configurations just run tests under `zfs` 
 
 #### Execution Time Distribution
 
-![execution time distribution](linux-zfs-hdd-l2arc-ssd/execution_time_distribution.svg)
-![density_plot.svg](linux-zfs-hdd-l2arc-ssd/density_plot.svg)
+![execution time distribution](graphs/linux-zfs-hdd-l2arc-ssd/execution_time_distribution.svg)
+![density_plot.svg](graphs/linux-zfs-hdd-l2arc-ssd/density_plot.svg)
 
 #### Read time vs Chunk size
 
