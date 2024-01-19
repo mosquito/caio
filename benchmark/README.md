@@ -100,11 +100,6 @@ than to disk I/O performance.
 ![execution time distribution](graphs/m1-tmpfs/execution_time_distribution.svg)
 ![density_plot.svg](graphs/m1-tmpfs/density_plot.svg)
 
-#### Boxplot of Time across Implementations and Operations
-
-![boxplot_time.svg](graphs/m1-tmpfs/boxplot_time.svg)
-
-
 #### Read time vs Chunk size
 
 ![caio.linux_aio_asyncio read time vs chunk_size](graphs/m1-tmpfs/caio.linux_aio_asyncio_read_time_chunk_size.svg)
@@ -145,10 +140,6 @@ For the benchmark tests, a no special configurations just run tests under `btrfs
 
 ![execution time distribution](graphs/m1-btrfs/execution_time_distribution.svg)
 ![density_plot.svg](graphs/m1-btrfs/density_plot.svg)
-
-#### Boxplot of Time across Implementations and Operations
-
-![boxplot_time.svg](graphs/m1-btrfs/boxplot_time.svg)
 
 
 #### Read time vs Chunk size
@@ -195,11 +186,6 @@ than to disk I/O performance.
 
 ![execution time distribution](graphs/linux-tmpfs/execution_time_distribution.svg)
 ![density_plot.svg](graphs/linux-tmpfs/density_plot.svg)
-
-#### Boxplot of Time across Implementations and Operations
-
-![boxplot_time.svg](graphs/linux-tmpfs/boxplot_time.svg)
-
 
 #### Read time vs Chunk size
 

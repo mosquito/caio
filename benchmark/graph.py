@@ -103,23 +103,3 @@ plt.ylabel('Density')
 plt.grid(True)
 plt.savefig(save_path / 'density_plot.svg')
 plt.close()
-
-
-def plot_boxplot(data, group_vars, title, file_name):
-    plt.figure(figsize=(12, 8))
-    sns.boxplot(x=group_vars[0], y='time', hue=group_vars[1], data=data)
-    plt.title(title)
-    plt.xlabel(group_vars[0])
-    plt.ylabel('Time (ms)')
-    plt.grid(True)
-
-    # Save the plot
-    plt.savefig(file_name, format='svg')
-    plt.close()
-
-
-plot_boxplot(
-    df, ['implementation', 'operation'],
-    'Boxplot of Time across Implementations and Operations',
-    save_path / 'boxplot_time.svg'
-)
