@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <sys/eventfd.h>
 #include <sys/syscall.h>
+#include <stdint.h>
 #include <unistd.h>
 
 #define PY_SSIZE_T_CLEAN
@@ -387,7 +388,7 @@ static PyObject* AIOContext_process_events(
     for (i = 0; i < result; i++) {
         ev = &events[i];
 
-        op = (AIOOperation*) ev->data;
+        op = (AIOOperation*)(uintptr_t) ev->data;
         if (ev->res >= 0) {
             op->iocb.aio_nbytes = ev->res;
         } else {
@@ -574,7 +575,7 @@ static PyObject* AIOOperation_read(
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
-    self->iocb.aio_data = self;
+    self->iocb.aio_data = (uint64_t)(uintptr_t) self;
     self->context = NULL;
     self->buffer = NULL;
     self->py_buffer = NULL;
@@ -627,7 +628,7 @@ static PyObject* AIOOperation_write(
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
-    self->iocb.aio_data = self;
+    self->iocb.aio_data = (uint64_t)(uintptr_t) self;
 
     self->context = NULL;
     self->buffer = NULL;
@@ -703,7 +704,7 @@ static PyObject* AIOOperation_fsync(
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
-    self->iocb.aio_data = self;
+    self->iocb.aio_data = (uint64_t)(uintptr_t) self;
     self->context = NULL;
     self->buffer = NULL;
     self->py_buffer = NULL;
@@ -748,7 +749,7 @@ static PyObject* AIOOperation_fdsync(
 
     memset(&self->iocb, 0, sizeof(struct iocb));
 
-    self->iocb.aio_data = self;
+    self->iocb.aio_data = (uint64_t)(uintptr_t) self;
     self->buffer = NULL;
     self->py_buffer = NULL;
 
@@ -876,7 +877,7 @@ static PyMemberDef AIOOperation_members[] = {
 
 /*
    AIOOperation methods
-   */
+*/
 static PyMethodDef AIOOperation_methods[] = {
     {
         "read",
@@ -917,7 +918,7 @@ static PyMethodDef AIOOperation_methods[] = {
 
 /*
    AIOOperation class
-   */
+*/
 static PyTypeObject
 AIOOperationType = {
     PyVarObject_HEAD_INIT(NULL, 0)
