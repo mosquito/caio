@@ -61,9 +61,6 @@ jobs:
           - toxenv: py312
             python: "3.12"
             os: ubuntu-latest
-          - toxenv: py37
-            python: "3.7"
-            os: windows-latest
           - toxenv: py38
             python: "3.8"
             os: windows-latest
@@ -88,7 +85,7 @@ jobs:
           - toxenv: py311
             python: "3.11"
             os: macos-latest
-          - toxenv: py311
+          - toxenv: py312
             python: "3.12"
             os: macos-latest
 
