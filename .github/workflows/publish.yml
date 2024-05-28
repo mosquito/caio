@@ -79,7 +79,7 @@ jobs:
           python-version: "${{ matrix.python }}"
 
       - name: Install requires
-        run: python -m pip install twine wheel
+        run: python -m pip install twine wheel setuptools
 
       - name: Build wheel for python "${{ matrix.python }}"
         run: python setup.py bdist_wheel
