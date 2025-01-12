@@ -102,11 +102,11 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    if (self->max_requests > MAX_QUEUE) {
+    if (self->max_requests >= (MAX_QUEUE - 1)) {
         PyErr_Format(
             PyExc_ValueError,
             "max_requests too large. Allowed lower then %d",
-            MAX_QUEUE
+            MAX_QUEUE - 1
         );
         return -1;
     }
