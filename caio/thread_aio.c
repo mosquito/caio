@@ -170,8 +170,13 @@ void worker(void *arg) {
             result = fsync(fileno);
             break;
         case THAIO_FDSYNC:
+#ifdef HAVE_FDATASYNC
             result = fdatasync(fileno);
+#else
+            result = fsync(fileno);
+#endif
             break;
+
         case THAIO_READ:
             result = pread(fileno, buf, buf_size, offset);
             break;
