@@ -943,6 +943,8 @@ static PyModuleDef linux_aio_module = {
 
 
 PyMODINIT_FUNC PyInit_linux_aio(void) {
+    Py_Initialize();
+
     struct utsname uname_data;
 
     if (uname(&uname_data)) {

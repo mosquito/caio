@@ -102,11 +102,11 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    if (self->max_requests > MAX_QUEUE) {
+    if (self->max_requests >= (MAX_QUEUE - 1)) {
         PyErr_Format(
             PyExc_ValueError,
             "max_requests too large. Allowed lower then %d",
-            MAX_QUEUE
+            MAX_QUEUE - 1
         );
         return -1;
     }
@@ -170,8 +170,13 @@ void worker(void *arg) {
             result = fsync(fileno);
             break;
         case THAIO_FDSYNC:
+#ifdef HAVE_FDATASYNC
             result = fdatasync(fileno);
+#else
+            result = fsync(fileno);
+#endif
             break;
+
         case THAIO_READ:
             result = pread(fileno, buf, buf_size, offset);
             break;
@@ -803,7 +808,7 @@ static PyModuleDef thread_aio_module = {
 
 
 PyMODINIT_FUNC PyInit_thread_aio(void) {
-    PyEval_InitThreads();
+    Py_Initialize();
 
     PyObject *m;
 

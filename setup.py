@@ -23,7 +23,7 @@ if "linux" in OS_NAME:
                 "{}/thread_aio.c".format(module_name),
                 "{}/src/threadpool/threadpool.c".format(module_name),
             ],
-            extra_compile_args=["-g"],
+            extra_compile_args=["-g", "-DHAVE_FDATASYNC"],
         ),
     )
 elif "darwin" in OS_NAME:
@@ -34,7 +34,7 @@ elif "darwin" in OS_NAME:
                 "{}/thread_aio.c".format(module_name),
                 "{}/src/threadpool/threadpool.c".format(module_name),
             ],
-            extra_compile_args=["-g", "-Wno-implicit-function-declaration"],
+            extra_compile_args=["-g"],
         ),
     )
 if "linux" in OS_NAME:
