@@ -15,7 +15,7 @@ OS_NAME = platform.system().lower()
 extensions = []
 
 
-if "darwin" in OS_NAME or "linux" in OS_NAME:
+if "linux" in OS_NAME:
     extensions.append(
         Extension(
             "{}.thread_aio".format(module_name),
@@ -24,6 +24,17 @@ if "darwin" in OS_NAME or "linux" in OS_NAME:
                 "{}/src/threadpool/threadpool.c".format(module_name),
             ],
             extra_compile_args=["-g"],
+        ),
+    )
+elif "darwin" in OS_NAME:
+    extensions.append(
+        Extension(
+            "{}.thread_aio".format(module_name),
+            [
+                "{}/thread_aio.c".format(module_name),
+                "{}/src/threadpool/threadpool.c".format(module_name),
+            ],
+            extra_compile_args=["-g", "-Wno-implicit-function-declaration"],
         ),
     )
 if "linux" in OS_NAME:
