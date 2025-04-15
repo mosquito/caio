@@ -188,7 +188,7 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|H", kwlist, &self->max_requests)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|I", kwlist, &self->max_requests)) {
         return -1;
     }
 
@@ -344,14 +344,17 @@ static PyObject* AIOContext_process_events(
 
     unsigned min_requests = 0;
     unsigned max_requests = 0;
+    int tv_sec = 0;
     struct timespec timeout = {0, 0};
 
     static char *kwlist[] = {"max_requests", "min_requests", "timeout", NULL};
 
     if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "|HHi", kwlist,
-        &max_requests, &min_requests, &timeout.tv_sec
+        args, kwds, "|IIi", kwlist,
+        &max_requests, &min_requests, &tv_sec
     )) { return NULL; }
+
+    timeout.tv_sec = tv_sec;
 
     if (max_requests == 0) {
         max_requests = EV_MAX_REQUESTS_DEFAULT;
@@ -583,7 +586,7 @@ static PyObject* AIOOperation_read(
     uint64_t nbytes = 0;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "KI|LH", kwlist,
+        args, kwds, "KI|Lh", kwlist,
         &nbytes,
         &(self->iocb.aio_fildes),
         &(self->iocb.aio_offset),
@@ -637,7 +640,7 @@ static PyObject* AIOOperation_write(
     Py_ssize_t nbytes = 0;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "OI|LH", kwlist,
+        args, kwds, "OI|Lh", kwlist,
         &(self->py_buffer),
         &(self->iocb.aio_fildes),
         &(self->iocb.aio_offset),
@@ -710,7 +713,7 @@ static PyObject* AIOOperation_fsync(
     self->py_buffer = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-        args, kwds, "I|H", kwlist,
+        args, kwds, "I|h", kwlist,
         &(self->iocb.aio_fildes),
         &(self->iocb.aio_reqprio)
     );
@@ -754,7 +757,7 @@ static PyObject* AIOOperation_fdsync(
     self->py_buffer = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
-            args, kwds, "I|H", kwlist,
+            args, kwds, "I|h", kwlist,
             &(self->iocb.aio_fildes),
             &(self->iocb.aio_reqprio)
             );
