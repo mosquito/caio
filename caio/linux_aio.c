@@ -126,8 +126,8 @@ inline int io_submit_error(int result) {
 typedef struct {
     PyObject_HEAD
     aio_context_t ctx;
-    int fileno;
-    unsigned max_requests;
+    int32_t fileno;
+    uint32_t max_requests;
 } AIOContext;
 
 
@@ -342,9 +342,9 @@ static PyObject* AIOContext_process_events(
         return NULL;
     }
 
-    unsigned min_requests = 0;
-    unsigned max_requests = 0;
-    int tv_sec = 0;
+    uint32_t min_requests = 0;
+    uint32_t max_requests = 0;
+    int32_t tv_sec = 0;
     struct timespec timeout = {0, 0};
 
     static char *kwlist[] = {"max_requests", "min_requests", "timeout", NULL};
