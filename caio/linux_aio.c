@@ -596,7 +596,7 @@ static PyObject* AIOOperation_read(
     if (!argIsOk) return NULL;
 
     self->buffer = PyMem_Calloc(nbytes, sizeof(char));
-    self->iocb.aio_buf = (uint64_t) self->buffer;
+    self->iocb.aio_buf = (uint64_t)(uintptr_t) self->buffer;
     self->iocb.aio_nbytes = nbytes;
     self->py_buffer = PyMemoryView_FromMemory(self->buffer, nbytes, PyBUF_READ);
     self->iocb.aio_lio_opcode = IOCB_CMD_PREAD;
@@ -676,7 +676,7 @@ static PyObject* AIOOperation_write(
     Py_INCREF(self->py_buffer);
 
     self->iocb.aio_nbytes = nbytes;
-    self->iocb.aio_buf = (uint64_t) self->buffer;
+    self->iocb.aio_buf = (uint64_t)(uintptr_t) self->buffer;
 
     return (PyObject*) self;
 }
