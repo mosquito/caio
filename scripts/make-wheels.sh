@@ -5,7 +5,8 @@ mkdir -p dist
 MACHINE=$(/opt/python/cp311-cp311/bin/python3 -c 'import platform; print(platform.machine())')
 
 function build_wheel() {
-	/opt/python/$1/bin/pip wheel . -f . -w dist
+  /opt/python/$1/bin/pip install build
+	/opt/python/$1/bin/python -m build
 }
 
 build_wheel cp39-cp39
