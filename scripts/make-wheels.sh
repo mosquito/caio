@@ -8,7 +8,6 @@ function build_wheel() {
 	/opt/python/$1/bin/pip wheel . -f . -w dist
 }
 
-build_wheel cp38-cp38
 build_wheel cp39-cp39
 build_wheel cp310-cp310
 build_wheel cp311-cp311

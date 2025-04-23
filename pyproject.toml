@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "caio"
-license = "Apache-2.0"
+license = {file = "COPYING"}
 description = "Asynchronous file IO for Linux MacOS or Windows."
 readme = "README.md"
 authors = [{ name = "Dmitry Orlov", email = "me@mosquito.su"}]
@@ -34,8 +34,11 @@ dynamic = ["version"]
 [project.optional-dependencies]
 develop = [
   "aiomisc-pytest",
+  "coveralls",
+  "pylama[toml]",
   "pytest",
   "pytest-cov",
+  "setuptools",
 ]
 
 [tool.setuptools.packages.find]
@@ -43,3 +46,34 @@ include = ["caio*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "caio.version.__version__" }
+
+[tool.pylama]
+ignore= "C901,E252"
+
+[tool.pylama.linter.pycodestyle]
+max_line_length = 80
+
+[tool.tox]
+requires = ["tox>=4.19"]
+env_list = ["lint", "mypy", "3.9", "3.10", "3.11", "3.12", "3.13"]
+
+[tool.tox.env_run_base]
+pass_env = ["COVERALLS_*", "FORCE_COLOR"]
+extras = ["develop"]
+usedevelop = true
+commands = [
+    ["pytest", "--cov=caio", "--cov-report=term-missing", "-sv", "tests"],
+    ["-", "coveralls"]
+]
+
+[tool.tox.env.lint]
+description = "Run linting"
+deps = ["pyflakes~=2.4.0", "pylava"]
+commands = [["pylama", "caio", "tests"]]
+
+[tool.tox.env.mypy]
+description = "Run type checking"
+deps = ["mypy"]
+commands = [
+    ["mypy", "--allow-untyped-calls", "--allow-untyped-defs", "--allow-untyped-decorators", "caio"]
+]
