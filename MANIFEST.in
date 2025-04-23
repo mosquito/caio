@@ -1,5 +1,1 @@
-include caio/*.pyi
-include caio/py.typed
 recursive-include caio/src/threadpool *.*
-include README.rst
-include LICENSE
