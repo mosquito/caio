@@ -5,7 +5,7 @@ package_license = "Apache Software License"
 
 team_email = author_info[0][1]
 
-version_info = (0, 9, 22)
+version_info = (0, 9, 23)
 
 __author__ = ", ".join("{} <{}>".format(*info) for info in author_info)
 __version__ = ".".join(map(str, version_info))

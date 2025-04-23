@@ -4,7 +4,6 @@ sdist:
 	python3 setup.py sdist
 
 mac_wheel:
-	python3.8 setup.py bdist_wheel
 	python3.9 setup.py bdist_wheel
 	python3.10 setup.py bdist_wheel
 	python3.11 setup.py bdist_wheel
