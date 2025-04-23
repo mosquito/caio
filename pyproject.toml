@@ -1,3 +1,45 @@
 [build-system]
-requires = ["setuptools>=42"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "caio"
+license = "Apache-2.0"
+description = "Asynchronous file IO for Linux MacOS or Windows."
+readme = "README.md"
+authors = [{ name = "Dmitry Orlov", email = "me@mosquito.su"}]
+requires-python = ">=3.9"
+classifiers = [
+  "Topic :: Software Development",
+  "Topic :: Software Development :: Libraries",
+  "Intended Audience :: Developers",
+  "Natural Language :: English",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX",
+  "Operating System :: Microsoft",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+dynamic = ["version"]
+
+[project.urls]
+"Source Code" = "https://github.com/mosquito/caio/"
+
+[project.optional-dependencies]
+develop = [
+  "aiomisc-pytest",
+  "pytest",
+  "pytest-cov",
+]
+
+[tool.setuptools.packages.find]
+include = ["caio*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "caio.version.__version__" }
