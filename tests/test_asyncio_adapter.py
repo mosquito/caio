@@ -52,10 +52,11 @@ async def test_bad_file_descritor(tmp_path, async_context_maker):
 
 
 @pytest.fixture
-async def asyncio_exception_handler(event_loop):
+async def asyncio_exception_handler():
     handler = Mock(
         side_effect=lambda _loop, ctx: _loop.default_exception_handler(ctx)
     )
+    event_loop = asyncio.get_running_loop()
     current_handler = event_loop.get_exception_handler()
     event_loop.set_exception_handler(handler=handler)
     yield handler
