@@ -42,7 +42,7 @@ develop = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["caio*"]
+include = ["caio*", "tests"]
 
 [tool.setuptools.dynamic]
 version = { attr = "caio.version.__version__" }
