@@ -1,120 +1,80 @@
-# This workflow will install Python dependencies, run tests and lint with a single version of Python
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+name: build and publish
 
-name: publish
-
+# enables builds on releases, PRs and workflow dispatches,
+# only publishing on release
 on:
   release:
     types:
       - created
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  sdist:
-
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - uses: actions/checkout@v2
-        with:
-          submodules: recursive
-
-      - name: Setup python3.9
-        uses: actions/setup-python@v2
-        with:
-          python-version: "3.9"
-
-      - name: Install requires
-        run: python -m pip install twine build
-
-      - name: Build source package
-        run: python -m build --sdist
-
-      - name: Publishing to pypi
-        run: twine upload --skip-existing --disable-progress-bar dist/*.tar.gz
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-
-  wheel:
-
+  build:
+    name: Build Distributions (whl + sdist)
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
-
       matrix:
         include:
-          # MacOS
-          - python: '3.9'
-            os: macos-latest
-          - python: '3.10'
-            os: macos-latest
-          - python: '3.11'
-            os: macos-latest
-          - python: '3.12'
-            os: macos-latest
-          - python: '3.13'
-            os: macos-latest
-          # Windows
-          - python: '3.9'
-            os: windows-latest
-          - python: '3.10'
-            os: windows-latest
-          - python: '3.11'
-            os: windows-latest
-          - python: '3.12'
-            os: windows-latest
-          - python: '3.13'
-            os: windows-latest
+          - os: macos-latest
+          - os: windows-latest
+          - os: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Setup python${{ matrix.python }}
-        uses: actions/setup-python@v2
+      - name: Setup python
+        uses: actions/setup-python@v6
         with:
-          python-version: "${{ matrix.python }}"
+          python-version: "3.13"
 
       - name: Install requires
-        run: python -m pip install twine build
+        run: python -m pip install --upgrade pip build cibuildwheel twine
 
-      - name: Build wheel for python "${{ matrix.python }}"
-        run: python -m build --wheel
+      # only build sdist on linux
+      - name: Build sdist (Linux only)
+        if: runner.os == 'Linux'
+        run: python -m build --sdist
 
-      - name: Publishing to pypi
-        run: twine upload --skip-existing --disable-progress-bar dist/*.whl
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+      # build wheels for everywhere else, arches defined in pyproject.toml
+      - name: Build wheels for "${{ matrix.os }}"
+        run: python -m cibuildwheel --output-dir dist
 
+      - name: Check distributions
+        run: twine check dist/*
 
-  linux-wheels:
+      # only upload artifacts if they're going to be published to pypi
+      - uses: actions/upload-artifact@v6
+        if: github.event_name == 'release'
+        with:
+          name: dist-${{ runner.os }}
+          path: dist/*
+          retention-days: 2
 
+  publish:
+    name: Publish
+    needs: build
     runs-on: ubuntu-latest
 
+    # only publish on release events
+    if: github.event_name == 'release'
+
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/download-artifact@v6
         with:
-          submodules: recursive
+          path: dist
 
-      - name: Building manylinux2014 wheels
-        uses: docker://quay.io/pypa/manylinux2014_x86_64
-        with:
-          args: /bin/bash scripts/make-wheels.sh
-
-      - name: Setup python${{ matrix.python }}
-        uses: actions/setup-python@v2
-        with:
-          python-version: "3.10"
-
-      - name: Install requires
-        run: python -m pip install twine
-
-      - name: Publishing to pypi
-        run: twine upload --skip-existing --disable-progress-bar dist/*.whl
+      - name: Publish to pypi
+        run: |
+          python -m pip install --upgrade twine
+          twine upload --disable-progress-bar dist/**/*
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
