@@ -60,6 +60,9 @@ jobs:
           - toxenv: py313
             python: "3.13"
             os: ubuntu-latest
+          - toxenv: py314
+            python: "3.14"
+            os: ubuntu-latest
           - toxenv: py39
             python: "3.9"
             os: windows-latest
@@ -71,6 +74,9 @@ jobs:
             os: windows-latest
           - toxenv: py313
             python: "3.13"
+            os: windows-latest
+          - toxenv: py314
+            python: "3.14"
             os: windows-latest
           - toxenv: py39
             python: "3.9"
@@ -86,6 +92,8 @@ jobs:
             os: macos-latest
           - toxenv: py313
             python: "3.13"
+            os: macos-latest
+          - toxenv: py314
             os: macos-latest
 
     steps:

@@ -14,6 +14,7 @@ build_wheel cp310-cp310
 build_wheel cp311-cp311
 build_wheel cp312-cp312
 build_wheel cp313-cp313
+build_wheel cp314-cp314
 
 cd dist
 
