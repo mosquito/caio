@@ -8,7 +8,7 @@ license-files = ["COPYING"]
 description = "Asynchronous file IO for Linux MacOS or Windows."
 readme = "README.md"
 authors = [{ name = "Dmitry Orlov", email = "me@mosquito.su"}]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
   "Topic :: Software Development",
   "Topic :: Software Development :: Libraries",
@@ -19,7 +19,6 @@ classifiers = [
   "Operating System :: Microsoft",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -56,7 +55,7 @@ max_line_length = 80
 
 [tool.tox]
 requires = ["tox>=4.19"]
-env_list = ["lint", "mypy", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+env_list = ["lint", "mypy", "3.10", "3.11", "3.12", "3.13", "3.14"]
 
 [tool.tox.env_run_base]
 pass_env = ["COVERALLS_*", "FORCE_COLOR", "GITHUB_*"]

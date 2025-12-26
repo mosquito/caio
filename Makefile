@@ -8,10 +8,6 @@ sdist:
 .venvs:
 	mkdir -p $@
 
-.venvs/3.9: .venvs
-	python3.9 -m venv $@
-	$@/bin/python -m pip install -U pip setuptools build wheel
-
 .venvs/3.10: .venvs
 	python3.10 -m venv $@
 	$@/bin/python -m pip install -U pip setuptools build wheel
@@ -32,8 +28,7 @@ sdist:
 	python3.14 -m venv $@
 	$@/bin/python -m pip install -U pip setuptools build wheel
 
-mac_wheel: .venvs/3.9 .venvs/3.10 .venvs/3.11 .venvs/3.12 .venvs/3.13 .venvs/3.14
-	.venvs/3.9/bin/python -m build
+mac_wheel: .venvs/3.10 .venvs/3.11 .venvs/3.12 .venvs/3.13 .venvs/3.14
 	.venvs/3.10/bin/python -m build
 	.venvs/3.11/bin/python -m build
 	.venvs/3.12/bin/python -m build
