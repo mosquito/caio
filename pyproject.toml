@@ -4,6 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "caio"
+license = "Apache-2.0"
 license-files = ["COPYING"]
 description = "Asynchronous file IO for Linux MacOS or Windows."
 readme = "README.md"
@@ -25,7 +26,6 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: Implementation :: CPython",
-  "License :: OSI Approved :: Apache Software License",
 ]
 dynamic = ["version"]
 
