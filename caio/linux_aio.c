@@ -45,7 +45,7 @@ inline static long io_cancel(aio_context_t ctx, struct iocb *aiocb, struct io_ev
 }
 
 
-inline int io_cancel_error(int result) {
+int io_cancel_error(int result) {
     if (result == 0) return result;
 
     switch (errno) {
@@ -82,7 +82,7 @@ inline int io_cancel_error(int result) {
 }
 
 
-inline int io_submit_error(int result) {
+int io_submit_error(int result) {
     if (result >= 0) return result;
 
     switch (errno) {
