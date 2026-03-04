@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - check: lint
+          - check: mypy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - name: Run lint
+        if: matrix.check == 'lint'
+        run: uv run --with ruff ruff check caio tests
+      - name: Run mypy
+        if: matrix.check == 'mypy'
+        run: uv run --with mypy mypy --allow-untyped-calls --allow-untyped-defs --allow-untyped-decorators caio
+
+  tests:
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.10"
+            os: ubuntu-latest
+          - python: "3.11"
+            os: ubuntu-latest
+          - python: "3.12"
+            os: ubuntu-latest
+          - python: "3.13"
+            os: ubuntu-latest
+          - python: "3.14"
+            os: ubuntu-latest
+          - python: "3.10"
+            os: windows-latest
+          - python: "3.11"
+            os: windows-latest
+          - python: "3.13"
+            os: windows-latest
+          - python: "3.14"
+            os: windows-latest
+          - python: "3.10"
+            os: macos-latest
+          - python: "3.11"
+            os: macos-latest
+          - python: "3.12"
+            os: macos-latest
+          - python: "3.13"
+            os: macos-latest
+          - python: "3.14"
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "${{ matrix.python }}"
+      - run: uv sync --extra develop
+      - name: Run tests
+        run: uv run pytest --cov=caio --cov-report=term-missing -sv tests
+        env:
+          FORCE_COLOR: 1
+          COVERALLS_PARALLEL: 'true'
+          COVERALLS_SERVICE_NAME: github
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Report coverage
+        run: uv run coveralls
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  finish:
+    needs:
+      - tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Coveralls Finished
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.github_token }}
+          parallel-finished: true
