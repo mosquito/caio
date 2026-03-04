@@ -74,32 +74,12 @@ jobs:
           files: dist/*.whl
 
   wheels-macos:
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
     permissions:
       contents: write
     strategy:
       matrix:
-        include:
-          - os: macos-13
-            python: "3.10"
-          - os: macos-13
-            python: "3.11"
-          - os: macos-13
-            python: "3.12"
-          - os: macos-13
-            python: "3.13"
-          - os: macos-13
-            python: "3.14"
-          - os: macos-latest
-            python: "3.10"
-          - os: macos-latest
-            python: "3.11"
-          - os: macos-latest
-            python: "3.12"
-          - os: macos-latest
-            python: "3.13"
-          - os: macos-latest
-            python: "3.14"
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -109,7 +89,7 @@ jobs:
       - run: python -m build --wheel
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-macos-${{ matrix.os }}-${{ matrix.python }}
+          name: wheel-macos-${{ matrix.python }}
           path: dist/*.whl
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
