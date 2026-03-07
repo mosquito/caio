@@ -1,15 +1,22 @@
 Python wrapper for AIO
 ======================
 
-> **NOTE:** Native Linux aio implementation supports since 4.18 kernel version.
+Python bindings for async file I/O on Linux and a pure-Python/thread fallback
+for other platforms.
 
-Python bindings for Linux AIO API and simple asyncio wrapper.
+Three backends are available:
+
+| Backend         | Kernel | Notes                                                      |
+|-----------------|--------|------------------------------------------------------------|
+| `linux_uring`   | ≥ 5.6  | io_uring - shared ring buffers, zero-syscall completions   |
+| `linux_aio`     | ≥ 4.18 | kernel AIO (`io_submit` / `io_getevents`), `O_DIRECT` only |
+| `thread_aio`    | any    | pthreads pool, portable                                    |
+| `python_aio`    | any    | pure Python, no C extension required                       |
 
 Example
 -------
 
 ```python
-
 import asyncio
 from caio import AsyncioContext
 
@@ -43,26 +50,64 @@ async def main():
 loop.run_until_complete(main())
 ```
 
+Selecting a backend
+-------------------
+
+`from caio import AsyncioContext` picks the best available backend automatically
+(`linux_uring` → `linux_aio` → `thread_aio` → `python_aio`).
+
+To force a specific backend use the `CAIO_IMPL` environment variable:
+
+```bash
+CAIO_IMPL=uring   python my_app.py   # linux_uring
+CAIO_IMPL=linux   python my_app.py   # linux_aio
+CAIO_IMPL=thread  python my_app.py   # thread_aio
+CAIO_IMPL=python  python my_app.py   # python_aio
+```
+
+Or import a backend directly:
+
+```python
+# io_uring (Linux ≥ 5.6)
+from caio.linux_uring_asyncio import AsyncioContext
+
+# kernel AIO (Linux ≥ 4.18)
+from caio.linux_aio_asyncio import AsyncioContext
+
+# thread pool
+from caio.thread_aio_asyncio import AsyncioContext
+```
+
+A `default_implementation` file placed next to `caio/__init__.py` (useful for
+distro package maintainers) may contain one of `uring`, `linux`, `thread`, or
+`python` on its first non-comment line.
+
 Troubleshooting
 ---------------
 
-The `linux` implementation works normal for modern linux kernel versions
-and file systems. So you may have problems specific for your environment.
-It's not a bug and might be resolved some ways:
+### io_uring blocked by seccomp
 
-1. Upgrade the kernel
-2. Use compatible file system
-3. Use threads based or pure python implementation.
+Containers (Docker, Podman, Kubernetes) often block io_uring via a seccomp
+filter. The import will raise `ImportError` with a diagnostic message if
+`io_uring_setup(2)` returns `ENOSYS`.
 
-The caio since version 0.7.0 contains some ways to do this.
+Fix:
 
-1. In runtime use the environment variable `CAIO_IMPL` with possible values:
-   * `linux` - use native linux kernels aio mechanism
-   * `thread` - use thread based implementation written in C
-   * `python` - use pure python implementation
-2. File ``default_implementation`` located near ``__init__.py`` in caio
-   installation path. It's useful for distros package maintainers. This file
-   might contains comments (lines starts with ``#`` symbol) and the first line
-   should be one of ``linux`` ``thread`` or ``python``.
+```bash
+# Docker / Podman
+docker run --security-opt seccomp=unconfined ...
 
-Previous versions allows direct import of the target implementation.
+# Kubernetes
+securityContext:
+  seccompProfile:
+    type: Unconfined
+```
+
+### linux_aio compatibility
+
+`linux_aio` requires kernel ≥ 4.18 and a compatible filesystem.  If it does
+not work in your environment you can fall back to `thread` or `python`:
+
+```bash
+CAIO_IMPL=thread python my_app.py
+```

@@ -47,6 +47,8 @@ class AsyncioContextBase(abc.ABC):
             if self.context.submit(op) != 1:
                 raise IOError("Operation was not submitted")
 
+            self._on_submitted()
+
             try:
                 await future
             except asyncio.CancelledError:
@@ -56,6 +58,11 @@ class AsyncioContextBase(abc.ABC):
                     pass
                 raise
             return op.get_value()
+
+    def _on_submitted(self):
+        """Hook called after each op is placed in the context's queue.
+        Subclasses can override to implement batched submission (deferred flush).
+        """
 
     def _on_done(self, future, result):
         """

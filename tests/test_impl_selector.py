@@ -9,6 +9,8 @@ import pytest
 
 @pytest.fixture(params=caio.variants)
 def implementation(request):
+    if request.param is caio.linux_uring:
+        return "uring"
     if request.param is caio.linux_aio:
         return "linux"
     if request.param is caio.thread_aio:
