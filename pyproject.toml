@@ -52,3 +52,8 @@ line-length = 80
 
 [tool.ruff.lint]
 ignore = ["C901", "E252"]
+
+[dependency-groups]
+dev = [
+    "rich",
+]

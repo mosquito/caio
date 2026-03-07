@@ -25,4 +25,5 @@ class AsyncioContext(AsyncioContextBase):
 
     def _on_read_event(self):
         self.context.poll()
-        self.context.process_events()
+        while self.context.process_events():
+            pass

@@ -1,0 +1,12 @@
+[project]
+name = "caio-benchmark"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "caio",
+    "matplotlib",
+    "rich",
+]
+
+[tool.uv.sources]
+caio = { path = "..", editable = true }

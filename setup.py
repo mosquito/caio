@@ -40,6 +40,13 @@ if "linux" in OS_NAME:
             extra_compile_args=["-g"],
         ),
     )
+    extensions.append(
+        Extension(
+            "{}.linux_uring".format(module_name),
+            ["{}/linux_uring.c".format(module_name)],
+            extra_compile_args=["-g"],
+        ),
+    )
 
 
 setup(
