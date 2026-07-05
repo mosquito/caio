@@ -1,9 +1,12 @@
 import os
 import warnings
+from importlib.metadata import Distribution
 
 from . import python_aio, python_aio_asyncio
 from .abstract import AbstractContext, AbstractOperation
-from .version import __author__, __version__
+
+__version__ = Distribution.from_name("caio").version
+__author__ = "Dmitry Orlov <me@mosquito.su>"
 
 
 try:

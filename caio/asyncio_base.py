@@ -12,8 +12,8 @@ OperationType = typing.Type[abstract.AbstractOperation]
 
 class AsyncioContextBase(abc.ABC):
     MAX_REQUESTS_DEFAULT = 512
-    CONTEXT_CLASS = None    # type: ContextType
-    OPERATION_CLASS = None  # type: OperationType
+    CONTEXT_CLASS: ContextType
+    OPERATION_CLASS: OperationType
 
     def __init__(self, max_requests=None, loop=None, **kwargs):
         max_requests = max_requests or self.MAX_REQUESTS_DEFAULT
