@@ -4,6 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "caio"
+version = "0.10.2"
 license = "Apache-2.0"
 license-files = ["COPYING"]
 description = "Asynchronous file IO for Linux MacOS or Windows."
@@ -27,7 +28,6 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: Implementation :: CPython",
 ]
-dynamic = ["version"]
 
 [project.urls]
 "Source Code" = "https://github.com/mosquito/caio/"
@@ -46,9 +46,6 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.setuptools.packages.find]
 include = ["caio*"]
-
-[tool.setuptools.dynamic]
-version = { attr = "caio.version.__version__" }
 
 [tool.ruff]
 line-length = 80
