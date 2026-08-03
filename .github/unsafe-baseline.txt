@@ -1,0 +1,20 @@
+# Tracked `unsafe` surface per crate - see scripts/check-unsafe-baseline.py
+# and design/generalized-safe-design.md's testing strategy section ("CI
+# check, запрещающий расширение unsafe allowlist").
+#
+# Counts `unsafe fn`/`unsafe impl`/`unsafe trait`/`unsafe {` constructs
+# (via `cargo test`'s own compiled source, tests included) per crate
+# directory. CI fails if a crate's actual count exceeds the number here;
+# raise it in the same PR that adds new unsafe usage, with a SAFETY:
+# comment justifying each new occurrence - never as an unrelated drive-by
+# change.
+#
+# caio-core is intentionally absent: it enforces zero unsafe at compile
+# time via `#![deny(unsafe_code)]`, so there's nothing for this baseline
+# to track there - a rustc error already blocks any regression.
+src/caio-backend-thread 10
+src/caio-backend-linux-aio 12
+src/caio-backend-uring 42
+src/thread_aio 0
+src/linux_aio 3
+src/linux_uring 4

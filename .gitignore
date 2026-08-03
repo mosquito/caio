@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Rust build artifacts
+/target
+*.dSYM/
+
 # Distribution / packaging
 .Python
 build/
@@ -129,3 +133,18 @@ dmypy.json
 # Pyre type checker
 .pyre/
 *.bin
+
+# Reliability review requested as part of the Rust implementation PR.
+!/design/
+!/design/rust-issues.md
+!/design/gil-free-issues.md
+
+# pyo3-stub-gen regeneration binaries - a global `bin/` ignore rule can
+# otherwise swallow these silently (see the Native extensions section of
+# CLAUDE.md).
+!/src/thread_aio/bin/
+!/src/thread_aio/bin/stub_gen.rs
+!/src/linux_aio/bin/
+!/src/linux_aio/bin/stub_gen.rs
+!/src/linux_uring/bin/
+!/src/linux_uring/bin/stub_gen.rs

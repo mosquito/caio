@@ -1,14 +1,14 @@
 import os
 from collections import defaultdict
+from collections.abc import Callable
 from enum import IntEnum, unique
 from io import BytesIO
 from multiprocessing.pool import ThreadPool
 from threading import Lock, RLock
 from types import MappingProxyType
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 from .abstract import AbstractContext, AbstractOperation
-
 
 fdsync = getattr(os, "fdatasync", os.fsync)
 NATIVE_PREAD_PWRITE = hasattr(os, "pread") and hasattr(os, "pwrite")
@@ -121,7 +121,7 @@ class Context(AbstractContext):
 
         for operation in aio_operations:
             if not isinstance(operation, Operation):
-                raise ValueError("Invalid Operation %r", operation)
+                raise ValueError(f"Invalid Operation {operation!r}")  # noqa: TRY004 (public API, keep ValueError)
 
             operations.append(operation)
 
@@ -171,13 +171,13 @@ class Operation(AbstractOperation):
     def __init__(
         self,
         fd: int,
-        nbytes: Optional[int],
-        offset: Optional[int],
+        nbytes: int | None,
+        offset: int | None,
         opcode: OpCode,
-        payload: Optional[bytes] = None,
-        priority: Optional[int] = None,
+        payload: bytes | None = None,
+        priority: int | None = None,
     ):
-        self.callback = None    # type: Optional[Callable[[int], Any]]
+        self.callback: Callable[[int], Any] | None = None
         self.buffer = BytesIO()
 
         if opcode == OpCode.WRITE and payload:
@@ -233,7 +233,7 @@ class Operation(AbstractOperation):
         """
         return cls(fd, None, None, opcode=OpCode.FDSYNC, priority=priority)
 
-    def get_value(self) -> Union[bytes, int]:
+    def get_value(self) -> bytes | int:
         """
         Method returns a bytes value of AIOOperation's result or None.
         """
@@ -257,7 +257,7 @@ class Operation(AbstractOperation):
         return self.__offset
 
     @property
-    def payload(self) -> Optional[memoryview]:
+    def payload(self) -> memoryview | None:
         return self.buffer.getbuffer()
 
     @property

@@ -1,8 +1,23 @@
 import abc
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any, Protocol, runtime_checkable
 
 
-class AbstractContext(abc.ABC):
+@runtime_checkable
+class AbstractContext(Protocol):
+    """
+    Structural interface (`typing.Protocol`, not a plain `abc.ABC`)
+    deliberately: the three native backends (`thread_aio`/`linux_aio`/
+    `linux_uring`) are PyO3 classes generated straight from Rust via
+    pyo3-stub-gen (see each backend's own `.pyi`) - they satisfy this
+    interface by having the right methods/properties, not by literally
+    declaring `class Context(AbstractContext):` in a hand-maintained
+    stub. Protocol conformance is checked structurally by mypy, so no
+    such declaration is needed. `python_aio.Context` still explicitly
+    subclasses this below - that continues to work exactly as before,
+    Protocol classes support being subclassed like an ordinary ABC too.
+    """
+
     @property
     def max_requests(self) -> int:
         raise NotImplementedError
@@ -14,7 +29,25 @@ class AbstractContext(abc.ABC):
         raise NotImplementedError(aio_operations)
 
 
-class AbstractOperation(abc.ABC):
+@runtime_checkable
+class AbstractOperation(Protocol):
+    """
+    fd lifetime contract: `fd` is stored as a plain integer and only
+    dereferenced later, once the operation actually runs - deferred to a
+    worker thread for thread_aio, to a later flush()/io_uring_enter() call
+    for linux_uring, immediately (synchronously, within submit() itself)
+    for linux_aio and python_aio. The caller must keep `fd` open and
+    pointed at the same file until the operation completes (or is
+    cancelled); closing it early and letting something else reuse that
+    same fd number is undefined behavior here, same as it would be for any
+    other in-flight async I/O against a raw fd (including the kernel's own
+    io_uring, absent its separate registered-files mechanism). caio does
+    not duplicate/pin the descriptor on the caller's behalf - deliberately,
+    since doing so would cost an extra dup()/close() syscall pair per
+    operation, defeating a large part of the point of using io_uring in
+    particular.
+    """
+
     @classmethod
     @abc.abstractmethod
     def read(
@@ -55,7 +88,7 @@ class AbstractOperation(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def get_value(self) -> Union[bytes, int]:
+    def get_value(self) -> bytes | int:
         """
         Method returns a bytes value of AIOOperation's result or None.
         """
@@ -73,7 +106,7 @@ class AbstractOperation(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def payload(self) -> Optional[Union[bytes, memoryview]]:
+    def payload(self) -> bytes | memoryview | None:
         raise NotImplementedError
 
     @property
