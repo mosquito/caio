@@ -107,8 +107,19 @@ jobs:
           files: dist/*.whl
 
   wheels-musllinux-aarch64:
+    # Deliberately NOT run inside `container:` (unlike every other wheels-*
+    # job) - GitHub Actions cannot run JavaScript-based actions (checkout,
+    # upload-artifact, the gh-release upload) inside an Alpine container on
+    # an ARM64 runner ("JavaScript Actions in Alpine containers are only
+    # supported on x64 Linux runners" - a known GitHub Actions limitation,
+    # architecture-specific, which is why wheels-musllinux-x86_64 doesn't
+    # need this workaround). Instead: checkout/upload/release run directly
+    # on the plain Ubuntu ARM64 host, and only the actual musl-linked build
+    # step below runs inside the musllinux container, invoked explicitly via
+    # `docker run` against the checked-out workspace bind-mounted in - the
+    # GitHub-hosted ARM64 runner image ships Docker already (proven by every
+    # other container:-based job on this same runner type relying on it).
     runs-on: ubuntu-24.04-arm
-    container: quay.io/pypa/musllinux_1_2_aarch64
     permissions:
       contents: write
     strategy:
@@ -116,13 +127,18 @@ jobs:
         python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314]
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
       - name: Set version from release tag
         run: uv version --frozen "${GITHUB_REF_NAME#v}"
       - name: Build wheel
         run: |
-          /opt/python/${{ matrix.python }}/bin/pip install -U setuptools wheel
-          /opt/python/${{ matrix.python }}/bin/pip wheel . --no-build-isolation --no-deps -w /tmp/raw/
-          auditwheel repair /tmp/raw/caio-*.whl -w dist/ && rm /tmp/raw/caio-*.whl
+          docker run --rm -v "${{ github.workspace }}:/work" -w /work \
+            quay.io/pypa/musllinux_1_2_aarch64 bash -c '
+              /opt/python/${{ matrix.python }}/bin/pip install -U setuptools wheel &&
+              /opt/python/${{ matrix.python }}/bin/pip wheel . --no-build-isolation --no-deps -w /tmp/raw/ &&
+              auditwheel repair /tmp/raw/caio-*.whl -w dist/ &&
+              rm /tmp/raw/caio-*.whl
+            '
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-musllinux-aarch64-${{ matrix.python }}
