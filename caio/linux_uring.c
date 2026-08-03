@@ -84,6 +84,7 @@ typedef struct {
     PyObject_HEAD
     PyObject   *py_buffer;   /* memoryview (read) or bytes (write) */
     PyObject   *callback;
+    PyObject   *context;     /* owning Context, held only while in flight */
     uint8_t     opcode;      /* URING_* enum */
     uint32_t    fileno;
     uint64_t    offset;
@@ -97,6 +98,7 @@ typedef struct {
 
 static void AIOOperation_dealloc(AIOOperation *self) {
     Py_CLEAR(self->callback);
+    Py_CLEAR(self->context);
 
     /* buf points into py_buffer's internal storage for reads — do NOT free
      * it separately; Py_CLEAR(py_buffer) handles the memory. */
@@ -141,6 +143,7 @@ static PyObject *AIOOperation_read(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->context = NULL;
     self->callback = NULL;
     self->error = 0;
 
@@ -192,6 +195,7 @@ static PyObject *AIOOperation_write(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->context = NULL;
     self->callback = NULL;
     self->error = 0;
 
@@ -248,6 +252,7 @@ static PyObject *AIOOperation_fsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->context = NULL;
     self->callback = NULL;
     self->error = 0;
 
@@ -282,6 +287,7 @@ static PyObject *AIOOperation_fdsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->context = NULL;
     self->callback = NULL;
     self->error = 0;
 
@@ -349,6 +355,10 @@ static PyObject *AIOOperation_set_callback(
 
 
 static PyMemberDef AIOOperation_members[] = {
+    {
+        "context", T_OBJECT,
+        offsetof(AIOOperation, context),   READONLY, "context object"
+    },
     {
         "fileno",  T_UINT,
         offsetof(AIOOperation, fileno),    READONLY, "file descriptor"
@@ -742,8 +752,12 @@ static int uring_drain_cq(AIOContext *self, uint32_t max) {
         /* in_progress deliberately NOT reset here - one-shot forever once
          * genuinely submitted, matching thread_aio/linux_aio and the
          * (paused) Rust rewrite: a completed Operation must not be
-         * resubmittable, only a fresh one constructed for a retry. */
+         * resubmittable, only a fresh one constructed for a retry.
+         * context IS released here (unlike in_progress) - the kernel is
+         * done touching anything for this op, so there's no more reason
+         * to keep the Context alive on its behalf. */
         AIOOperation *op = (AIOOperation *)(uintptr_t) cqe->user_data;
+        Py_CLEAR(op->context);
         op->result = cqe->res;
         if (cqe->res < 0) {
             op->error = -cqe->res;
@@ -876,6 +890,16 @@ static PyObject *AIOContext_submit(AIOContext *self, PyObject *args) {
 
         op->in_progress = 1;
         Py_INCREF(op);
+
+        /* Held only while genuinely in flight (cleared on completion in
+         * uring_drain_cq()) - without this, a Context the caller drops
+         * while an operation is still outstanding could be garbage
+         * collected mid-flight, munmapping the SQ/CQ rings and closing
+         * uring_fd while the kernel may still be touching them. */
+        Py_XDECREF(op->context);
+        op->context = (PyObject *) self;
+        Py_INCREF(self);
+
         submitted++;
     }
 
