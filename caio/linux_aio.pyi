@@ -7,6 +7,18 @@ from .abstract import AbstractContext, AbstractOperation
 class Context(AbstractContext):
     def __init__(self, max_requests: int = 32): ...
 
+    @property
+    def fileno(self) -> int: ...
+
+    def poll(self) -> int: ...
+
+    def process_events(
+        self,
+        max_requests: int = 512,
+        min_requests: int = 0,
+        timeout: int = 0,
+    ) -> int: ...
+
 
 # noinspection PyPropertyDefinition
 class Operation(AbstractOperation):
@@ -40,6 +52,12 @@ class Operation(AbstractOperation):
 
     @property
     def nbytes(self) -> int: ...
+
+    @property
+    def context(self) -> AbstractContext | None: ...
+
+    @property
+    def priority(self) -> int: ...
 
     def set_callback(self, callback: Callable[[int], Any]) -> bool: ...
 

@@ -19,6 +19,11 @@ class Context(AbstractContext):
         timeout: int = 0,
     ) -> int: ...
 
+    def flush(self) -> int: ...
+
+    @property
+    def sqpoll(self) -> bool: ...
+
 
 # noinspection PyPropertyDefinition
 class Operation(AbstractOperation):
@@ -59,3 +64,6 @@ class Operation(AbstractOperation):
 
     @property
     def error(self) -> int: ...
+
+    @property
+    def context(self) -> AbstractContext | None: ...

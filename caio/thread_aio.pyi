@@ -7,6 +7,9 @@ from .abstract import AbstractContext, AbstractOperation
 class Context(AbstractContext):
     def __init__(self, max_requests: int = 512, pool_size=8): ...
 
+    @property
+    def pool_size(self) -> int: ...
+
 
 # noinspection PyPropertyDefinition
 class Operation(AbstractOperation):
@@ -40,5 +43,11 @@ class Operation(AbstractOperation):
 
     @property
     def nbytes(self) -> int: ...
+
+    @property
+    def result(self) -> int: ...
+
+    @property
+    def error(self) -> int: ...
 
     def set_callback(self, callback: Callable[[int], Any]) -> bool: ...
