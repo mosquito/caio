@@ -657,7 +657,8 @@ static int AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds) {
         params.flags = flag_table[i];
         if (params.flags & IORING_SETUP_SQPOLL)
             params.sq_thread_idle = 100;  /* ms; let kthread sleep when idle */
-        self->uring_fd = io_uring_setup(self->max_requests, &params);
+        /* +1: SQPOLL dequeue lag headroom */
+        self->uring_fd = io_uring_setup(self->max_requests + 1, &params);
         if (self->uring_fd >= 0) {
             flags_used = params.flags;
             break;
@@ -1413,9 +1414,28 @@ PyMODINIT_FUNC PyInit_linux_uring(void) {
     }
     close(probe_fd);
 
+    /* Probe whether SQPOLL is actually usable (kernel + capabilities) -
+     * exposed as SQPOLL_ALLOWED so callers can pick a default without
+     * constructing a real Context just to find out. Context(sqpoll=True)
+     * already falls back gracefully on its own either way (see
+     * flag_table_sqpoll) - this is purely informational. */
+    struct io_uring_params sqpoll_probe;
+    memset(&sqpoll_probe, 0, sizeof(sqpoll_probe));
+    sqpoll_probe.flags = IORING_SETUP_SQPOLL;
+    sqpoll_probe.sq_thread_idle = 100;
+    int sqpoll_probe_fd = io_uring_setup(1, &sqpoll_probe);
+    int sqpoll_allowed = sqpoll_probe_fd >= 0;
+    if (sqpoll_probe_fd >= 0)
+        close(sqpoll_probe_fd);
+
     PyObject *m = PyModule_Create(&linux_uring_module);
     if (m == NULL)
         return NULL;
+
+    if (PyModule_AddObject(m, "SQPOLL_ALLOWED", PyBool_FromLong(sqpoll_allowed)) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
 
     if (PyType_Ready(&AIOContextType)   < 0) return NULL;
     if (PyType_Ready(&AIOOperationType) < 0) return NULL;

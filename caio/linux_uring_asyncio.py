@@ -1,14 +1,19 @@
 from .asyncio_base import AsyncioContextBase
-from .linux_uring import Context, Operation
+from .linux_uring import SQPOLL_ALLOWED, Context, Operation
 
 
 class AsyncioContext(AsyncioContextBase):
     OPERATION_CLASS = Operation
     CONTEXT_CLASS = Context
 
-    def _create_context(self, max_requests):
-        context = super()._create_context(max_requests)
+    def _create_context(self, max_requests, **kwargs):
+        # SQPOLL_ALLOWED reflects a real kernel/capability probe done once
+        # at import time (see linux_uring.c) - default to it rather than
+        # to sqpoll=False, but let an explicit caller kwarg win either way.
+        kwargs.setdefault("sqpoll", SQPOLL_ALLOWED)
+        context = super()._create_context(max_requests, **kwargs)
         self.loop.add_reader(context.fileno, self._on_read_event)
+        self._flush_scheduled = False
         return context
 
     def _on_done(self, future, result):
@@ -20,16 +25,31 @@ class AsyncioContext(AsyncioContextBase):
         self.loop.remove_reader(self.context.fileno)
 
     def _on_submitted(self):
-        # Flush immediately after every submit.
-        #
-        # Non-SQPOLL (default): flush() calls io_uring_enter() which completes
-        # page-cache ops inline, then drain_cq() fires futures *before* the
-        # caller reaches `await future` — so the coroutine never suspends for
-        # those ops.  Truly async ops (real disk) leave the future unset; the
-        # coroutine suspends and the eventfd wakes it when the kernel is done.
-        #
-        # SQPOLL: flush() wakes the kernel thread if sleeping, then drain_cq().
-        # Same "fast path" benefit when the thread has already completed the op.
+        # Non-SQPOLL flush() completes page-cache ops inline (drain_cq fires
+        # futures before `await future` even suspends); SQPOLL just wakes
+        # the kernel thread if it's asleep - and only when it's actually
+        # gone idle, so eager per-op flush() is already close to syscall-
+        # free there. Batching doesn't reduce a cost that's mostly already
+        # gone - measured no meaningful difference either way - so ignore
+        # deferred whenever the kernel actually negotiated SQPOLL (not
+        # just what was requested - EPERM/EINVAL can silently fall back to
+        # a plain ring, see linux_uring.c's flag_table_sqpoll).
+        if not self.deferred or self.context.sqpoll:
+            self.context.flush()
+            return
+        # Nothing between submit()'s isinstance check and here ever awaits,
+        # so N concurrently-scheduled submits used to each flush their own
+        # single SQE back to back - no batching despite N being ready at
+        # once. call_soon() defers to the next _run_once() pass, after all
+        # of them have written their SQE, so one flush() covers the whole
+        # batch - at the cost of one extra event-loop round-trip for a lone
+        # unbatched op.
+        if not self._flush_scheduled:
+            self._flush_scheduled = True
+            self.loop.call_soon(self._deferred_flush)
+
+    def _deferred_flush(self):
+        self._flush_scheduled = False
         self.context.flush()
 
     def _on_read_event(self):

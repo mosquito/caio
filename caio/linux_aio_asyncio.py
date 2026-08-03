@@ -9,7 +9,50 @@ class AsyncioContext(AsyncioContextBase):
     def _create_context(self, max_requests):
         context = super()._create_context(max_requests)
         self.loop.add_reader(context.fileno, self._on_read_event)
+        self._pending = []
+        self._submit_scheduled = False
         return context
+
+    def _submit_op(self, op, future):
+        if not self.deferred:
+            super()._submit_op(op, future)
+            return
+        # Context.submit() already accepts *ops and builds one iocbpp array
+        # for the whole batch - call_soon() defers to the next _run_once()
+        # pass, after every currently-ready submit() has queued its op, so
+        # one submit() call handles all of them together.
+        self._pending.append((op, future))
+        if not self._submit_scheduled:
+            self._submit_scheduled = True
+            self.loop.call_soon(self._deferred_submit)
+
+    def _deferred_submit(self):
+        self._submit_scheduled = False
+        pending, self._pending = self._pending, []
+        # Already cancelled while waiting here - never reached the kernel,
+        # nothing to submit or cancel for these.
+        pending = [(op, fut) for op, fut in pending if not fut.done()]
+        if not pending:
+            return
+        ops = [op for op, _ in pending]
+        try:
+            accepted = self.context.submit(*ops)
+        except BaseException as exc:  # noqa: BLE001 (must isolate any submit()-time exception, including SystemExit/KeyboardInterrupt, since this runs as a bare call_soon callback)
+            # submit() itself can raise synchronously (e.g. a bad fd in the
+            # batch) - this runs as a bare call_soon callback, not inside
+            # any of the pending coroutines, so letting it escape here
+            # would just get logged by asyncio's default handler and leave
+            # every future in the batch unresolved forever. Every op in
+            # this batch failed together (io_submit() rejects the whole
+            # call on this kind of error, not just a prefix).
+            for op, fut in pending:
+                if not fut.done():
+                    fut.set_exception(exc)
+            return
+        # io_submit() accepts a prefix; anything past `accepted` failed.
+        for op, fut in pending[accepted:]:
+            if not fut.done():
+                fut.set_exception(OSError("Operation was not submitted"))
 
     def _on_done(self, future, result):
         """
