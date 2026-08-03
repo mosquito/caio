@@ -140,6 +140,9 @@ typedef struct {
     char* buffer;
     int error;
     uint8_t in_progress;
+    uint8_t done;   /* genuine completion reached - unlike in_progress
+                     * (sticky forever, guards resubmission), this is what
+                     * payload/get_value() gate on */
     struct iocb iocb;
     PyObject* weakreflist;
 } AIOOperation;
@@ -388,6 +391,7 @@ static PyObject* AIOContext_cancel(AIOContext *self, PyObject *args, PyObject *k
      * the (paused) Rust rewrite; a cancelled Operation is still terminal,
      * not retryable, only a fresh one constructed for a retry. */
     Py_CLEAR(op->context);
+    op->done = 1;
 
     if (op->callback != NULL) {
         PyObject *rv = PyObject_CallFunction(op->callback, "K", ev.res);
@@ -516,6 +520,7 @@ static PyObject* AIOContext_process_events(
         op = (AIOOperation*)(uintptr_t) ev->data;
 
         Py_CLEAR(op->context);
+        op->done = 1;
 
         if (ev->res >= 0) {
             op->iocb.aio_nbytes = ev->res;
@@ -714,6 +719,7 @@ static PyObject* AIOOperation_read(
     self->buffer = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->weakreflist = NULL;
 
     uint64_t nbytes = 0;
@@ -787,6 +793,7 @@ static PyObject* AIOOperation_write(
     self->buffer = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->weakreflist = NULL;
 
     Py_ssize_t nbytes = 0;
@@ -875,6 +882,7 @@ static PyObject* AIOOperation_fsync(
     self->buffer = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->weakreflist = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
@@ -924,6 +932,7 @@ static PyObject* AIOOperation_fdsync(
     self->buffer = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->weakreflist = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
@@ -953,6 +962,13 @@ PyDoc_STRVAR(AIOOperation_get_value_docstring,
 static PyObject* AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
 ) {
+    if (self->in_progress && !self->done) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "get_value() is not available while the operation is in flight"
+        );
+        return NULL;
+    }
 
     if (self->error != 0) {
         PyErr_SetString(
@@ -1014,6 +1030,35 @@ static PyObject* AIOOperation_set_callback(
     Py_RETURN_TRUE;
 }
 
+static PyObject *AIOOperation_payload_getter(AIOOperation *self, void *closure) {
+    if (self->in_progress && !self->done) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "payload is not available while the operation is in flight"
+        );
+        return NULL;
+    }
+
+    /* fsync/fdsync Operations never allocate a buffer - matches T_OBJECT's
+     * (as opposed to T_OBJECT_EX's) own NULL-to-None behavior, which this
+     * getter replaces. */
+    if (self->py_buffer == NULL)
+        Py_RETURN_NONE;
+
+    Py_INCREF(self->py_buffer);
+    return self->py_buffer;
+}
+
+
+static PyGetSetDef AIOOperation_getset[] = {
+    {
+        "payload", (getter) AIOOperation_payload_getter, NULL,
+        "payload", NULL
+    },
+    {NULL}
+};
+
+
 /*
    AIOOperation properties
    */
@@ -1037,11 +1082,6 @@ static PyMemberDef AIOOperation_members[] = {
         "offset", T_ULONGLONG,
         offsetof(AIOOperation, iocb.aio_offset),
         READONLY, "offset"
-    },
-    {
-        "payload", T_OBJECT,
-        offsetof(AIOOperation, py_buffer),
-        READONLY, "payload"
     },
     {
         "nbytes", T_ULONGLONG,
@@ -1105,6 +1145,7 @@ AIOOperationType = {
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_dealloc = (destructor) AIOOperation_dealloc,
     .tp_members = AIOOperation_members,
+    .tp_getset = AIOOperation_getset,
     .tp_methods = AIOOperation_methods,
     .tp_repr = (reprfunc) AIOOperation_repr,
     .tp_weaklistoffset = offsetof(AIOOperation, weakreflist)

@@ -94,6 +94,9 @@ typedef struct {
     Py_ssize_t  buf_size;
     char       *buf;
     uint8_t     in_progress;
+    uint8_t     done;   /* genuine completion reached - unlike in_progress
+                          * (sticky forever, guards resubmission), this is
+                          * what payload/get_value() gate on */
 } AIOOperation;
 
 
@@ -147,6 +150,7 @@ static PyObject *AIOOperation_read(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->context = NULL;
     self->weakreflist = NULL;
     self->callback = NULL;
@@ -200,6 +204,7 @@ static PyObject *AIOOperation_write(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->context = NULL;
     self->weakreflist = NULL;
     self->callback = NULL;
@@ -258,6 +263,7 @@ static PyObject *AIOOperation_fsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->context = NULL;
     self->weakreflist = NULL;
     self->callback = NULL;
@@ -294,6 +300,7 @@ static PyObject *AIOOperation_fdsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->context = NULL;
     self->weakreflist = NULL;
     self->callback = NULL;
@@ -319,6 +326,14 @@ PyDoc_STRVAR(AIOOperation_get_value_docstring,
 static PyObject *AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
 ) {
+    if (self->in_progress && !self->done) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "get_value() is not available while the operation is in flight"
+        );
+        return NULL;
+    }
+
     if (self->error != 0) {
         PyErr_SetString(PyExc_SystemError, strerror(self->error));
         return NULL;
@@ -362,6 +377,35 @@ static PyObject *AIOOperation_set_callback(
 }
 
 
+static PyObject *AIOOperation_payload_getter(AIOOperation *self, void *closure) {
+    if (self->in_progress && !self->done) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "payload is not available while the operation is in flight"
+        );
+        return NULL;
+    }
+
+    /* fsync/fdsync Operations never allocate a buffer - matches T_OBJECT's
+     * (as opposed to T_OBJECT_EX's) own NULL-to-None behavior, which this
+     * getter replaces. */
+    if (self->py_buffer == NULL)
+        Py_RETURN_NONE;
+
+    Py_INCREF(self->py_buffer);
+    return self->py_buffer;
+}
+
+
+static PyGetSetDef AIOOperation_getset[] = {
+    {
+        "payload", (getter) AIOOperation_payload_getter, NULL,
+        "payload", NULL
+    },
+    {NULL}
+};
+
+
 static PyMemberDef AIOOperation_members[] = {
     {
         "context", T_OBJECT,
@@ -374,10 +418,6 @@ static PyMemberDef AIOOperation_members[] = {
     {
         "offset",  T_ULONGLONG,
         offsetof(AIOOperation, offset),    READONLY, "offset"
-    },
-    {
-        "payload", T_OBJECT,
-        offsetof(AIOOperation, py_buffer), READONLY, "payload"
     },
     {
         "nbytes",  T_PYSSIZET,
@@ -444,6 +484,7 @@ static PyTypeObject AIOOperationType = {
     .tp_dealloc   = (destructor) AIOOperation_dealloc,
     .tp_repr      = (reprfunc)   AIOOperation_repr,
     .tp_members   = AIOOperation_members,
+    .tp_getset    = AIOOperation_getset,
     .tp_methods   = AIOOperation_methods,
     .tp_weaklistoffset = offsetof(AIOOperation, weakreflist),
 };
@@ -773,6 +814,7 @@ static int uring_drain_cq(AIOContext *self, uint32_t max) {
          * to keep the Context alive on its behalf. */
         AIOOperation *op = (AIOOperation *)(uintptr_t) cqe->user_data;
         Py_CLEAR(op->context);
+        op->done = 1;
         op->result = cqe->res;
         if (cqe->res < 0) {
             op->error = -cqe->res;
