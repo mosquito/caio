@@ -204,6 +204,56 @@ def test_payload_and_get_value_blocked_while_in_flight(tmp_path, polling_backend
         assert bytes(op.payload) == b"hello"
 
 
+def test_thread_aio_payload_and_get_value_blocked_while_in_flight(tmp_path):
+    """thread_aio only: same contract as
+    test_payload_and_get_value_blocked_while_in_flight above, but this
+    backend has no process_events()/poll() split to hook a synchronous
+    in-flight check onto - completion is purely callback-driven, and its
+    worker() thread runs the actual pread()/pwrite() syscall without
+    holding the GIL, so payload/get_value() reading result/buf_size/error
+    concurrently from the submitting thread is a genuine, unsynchronized
+    data race, not just a narrow window.
+
+    No timing race needed here either: pool_size=1 plus a first
+    operation whose own callback blocks (on blocker_release) makes the
+    single worker thread provably still busy with it - so a second
+    operation submitted right after is provably still queued, never
+    touched by the worker, when the assertions below run.
+    """
+    thread_aio = pytest.importorskip("caio.thread_aio")
+
+    with open(str(tmp_path / "temp.bin"), "wb+") as f:
+        fd = f.fileno()
+        ctx = thread_aio.Context(max_requests=8, pool_size=1)
+
+        blocker_started = threading.Event()
+        blocker_release = threading.Event()
+
+        blocker_op = thread_aio.Operation.fsync(fd)
+        blocker_op.set_callback(
+            lambda r: (blocker_started.set(), blocker_release.wait(5.0)),
+        )
+        ctx.submit(blocker_op)
+        assert blocker_started.wait(5.0), "blocker operation's callback never ran"
+
+        op = thread_aio.Operation.write(b"hello", fd, 0)
+        op_done = threading.Event()
+        op.set_callback(lambda r: op_done.set())
+        ctx.submit(op)
+
+        with pytest.raises(RuntimeError):
+            _ = op.payload
+        with pytest.raises(RuntimeError):
+            _ = op.get_value()
+
+        blocker_release.set()
+        assert op_done.wait(5.0), "operation never completed after unblocking the pool"
+
+        # Once actually completed, both must work normally again.
+        assert op.get_value() == 5
+        assert op.payload is None  # thread_aio frees a write's payload on completion
+
+
 def test_read_with_absurd_nbytes_raises_cleanly(backend):
     """Operation.read() with an unreasonably large nbytes must raise a
     catchable exception, never crash the process. A naive allocation

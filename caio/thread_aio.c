@@ -35,6 +35,15 @@ typedef struct {
     int result;
     uint8_t error;
     uint8_t in_progress;
+    uint8_t done;   /* genuine completion reached - set via a release
+                     * store by worker() before it ever touches the GIL,
+                     * and read via an acquire load from payload/
+                     * get_value() (both always GIL-held); this ordering
+                     * is what makes result/buf_size/error - written by
+                     * worker() on its own thread, without the GIL -
+                     * safe to read once done is observed true. Distinct
+                     * from in_progress, which is sticky forever and
+                     * guards resubmission instead. */
     Py_ssize_t buf_size;
     char* buf;
     PyObject* ctx;
@@ -209,6 +218,15 @@ void worker(void *arg) {
     if (op->opcode == THAIO_READ) {
         op->buf_size = result;
     }
+
+    /* Release store, paired with payload/get_value()'s acquire load of
+     * done - the plain writes to result/error/buf_size above happen on
+     * this thread without holding the GIL, so without a real memory
+     * barrier a concurrent GIL-holding reader on another thread has no
+     * guarantee of ever observing them (or of observing them in this
+     * order), regardless of in_progress. */
+    __atomic_store_n(&op->done, 1, __ATOMIC_RELEASE);
+
     state = PyGILState_Ensure();
     if (op->callback != NULL) {
         PyObject_CallFunction(op->callback, "i", result);
@@ -501,6 +519,7 @@ static PyObject* AIOOperation_read(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->weakreflist = NULL;
 
     uint64_t nbytes = 0;
@@ -579,6 +598,7 @@ static PyObject* AIOOperation_write(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->weakreflist = NULL;
 
     // Parsed into a plain local first, not directly into self->py_buffer:
@@ -661,6 +681,7 @@ static PyObject* AIOOperation_fsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->weakreflist = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
@@ -707,6 +728,7 @@ static PyObject* AIOOperation_fdsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
     self->weakreflist = NULL;
     uint16_t priority;
 
@@ -737,6 +759,14 @@ PyDoc_STRVAR(AIOOperation_get_value_docstring,
 static PyObject* AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
 ) {
+    if (self->in_progress && !__atomic_load_n(&self->done, __ATOMIC_ACQUIRE)) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "get_value() is not available while the operation is in flight"
+        );
+        return NULL;
+    }
+
     if (self->error != 0) {
         PyErr_SetString(
             PyExc_SystemError,
@@ -797,6 +827,37 @@ static PyObject* AIOOperation_set_callback(
     Py_RETURN_TRUE;
 }
 
+
+static PyObject *AIOOperation_payload_getter(AIOOperation *self, void *closure) {
+    if (self->in_progress && !__atomic_load_n(&self->done, __ATOMIC_ACQUIRE)) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "payload is not available while the operation is in flight"
+        );
+        return NULL;
+    }
+
+    /* fsync/fdsync Operations never allocate a buffer, and a completed
+     * write's is freed right after its callback runs (see worker()) -
+     * matches T_OBJECT's (as opposed to T_OBJECT_EX's) own NULL-to-None
+     * behavior, which this getter replaces. */
+    if (self->py_buffer == NULL)
+        Py_RETURN_NONE;
+
+    Py_INCREF(self->py_buffer);
+    return self->py_buffer;
+}
+
+
+static PyGetSetDef AIOOperation_getset[] = {
+    {
+        "payload", (getter) AIOOperation_payload_getter, NULL,
+        "payload", NULL
+    },
+    {NULL}
+};
+
+
 /*
     AIOOperation properties
 */
@@ -810,11 +871,6 @@ static PyMemberDef AIOOperation_members[] = {
         "offset", T_ULONGLONG,
         offsetof(AIOOperation, offset),
         READONLY, "offset"
-    },
-    {
-        "payload", T_OBJECT,
-        offsetof(AIOOperation, py_buffer),
-        READONLY, "payload"
     },
     {
         "nbytes", T_ULONGLONG,
@@ -888,6 +944,7 @@ AIOOperationType = {
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_dealloc = (destructor) AIOOperation_dealloc,
     .tp_members = AIOOperation_members,
+    .tp_getset = AIOOperation_getset,
     .tp_methods = AIOOperation_methods,
     .tp_repr = (reprfunc) AIOOperation_repr,
     .tp_weaklistoffset = offsetof(AIOOperation, weakreflist)
