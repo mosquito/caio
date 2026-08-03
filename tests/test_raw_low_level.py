@@ -348,6 +348,9 @@ def test_queue_overflow_allows_retry_with_original_data(tmp_path):
     """
     from caio import thread_aio
 
+    if thread_aio is None:
+        pytest.skip("thread_aio backend not available on this platform")
+
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
         ctx = thread_aio.Context(max_requests=1, pool_size=1)

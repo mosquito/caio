@@ -30,6 +30,9 @@ def test_invalid_parameter_handler_is_not_process_wide(tmp_path):
 
     from caio import thread_aio
 
+    if thread_aio is None:
+        pytest.skip("thread_aio backend not available on this platform")
+
     handler_t = ctypes.CFUNCTYPE(
         None, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_size_t,
     )

@@ -7,6 +7,9 @@ import pytest
 
 from caio import thread_aio
 
+if thread_aio is None:
+    pytest.skip("thread_aio backend not available on this platform", allow_module_level=True)
+
 
 def drain(deadline_s=5.0, poll=lambda: None):
     deadline = time.monotonic() + deadline_s
