@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/eventfd.h>
@@ -154,7 +155,11 @@ static PyObject *AIOOperation_read(
     }
 
     /* Allocate the result bytes object directly — the kernel writes into
-     * its internal buffer, so get_value() can return it with no copy. */
+     * its internal buffer, so get_value() can return it with no copy.
+     * PyBytes_FromStringAndSize(NULL, n) leaves the memory uninitialized
+     * (documented CPython behavior) - a short read's untouched tail must
+     * read as zero, not whatever heap garbage happened to be there
+     * (a real information-disclosure risk, not just cosmetic). */
     self->py_buffer = PyBytes_FromStringAndSize(NULL, (Py_ssize_t) nbytes);
     if (self->py_buffer == NULL) {
         Py_DECREF(self);
@@ -162,6 +167,7 @@ static PyObject *AIOOperation_read(
     }
     self->buf      = PyBytes_AS_STRING(self->py_buffer);
     self->buf_size = (Py_ssize_t) nbytes;
+    memset(self->buf, 0, (size_t) nbytes);
     self->opcode   = URING_READ;
 
     return (PyObject *) self;
@@ -191,24 +197,32 @@ static PyObject *AIOOperation_write(
 
     uint16_t priority = 0;
 
+    /* Parsed into a plain local first, not directly into self->py_buffer:
+     * "O" hands back a borrowed reference, and self->py_buffer must never
+     * hold one - AIOOperation_dealloc unconditionally Py_CLEARs it. Only
+     * assigned (and incref'd) below once confirmed to actually be the
+     * bytes object this Operation is going to own. */
+    PyObject *payload_bytes = NULL;
+
     if (!PyArg_ParseTupleAndKeywords(
             args, kwds, "OI|KH", kwlist,
-            &self->py_buffer, &self->fileno, &self->offset, &priority)) {
+            &payload_bytes, &self->fileno, &self->offset, &priority)) {
         Py_DECREF(self);
         return NULL;
     }
 
-    if (!PyBytes_Check(self->py_buffer)) {
+    if (!PyBytes_Check(payload_bytes)) {
         Py_DECREF(self);
         PyErr_SetString(PyExc_ValueError, "payload_bytes must be bytes");
         return NULL;
     }
 
-    if (PyBytes_AsStringAndSize(self->py_buffer, &self->buf, &self->buf_size)) {
+    if (PyBytes_AsStringAndSize(payload_bytes, &self->buf, &self->buf_size)) {
         Py_DECREF(self);
         return NULL;
     }
 
+    self->py_buffer = payload_bytes;
     Py_INCREF(self->py_buffer);
     self->opcode = URING_WRITE;
 
@@ -500,8 +514,10 @@ static int AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds) {
     if (self->max_requests == 0)
         self->max_requests = CTX_MAX_REQUESTS_DEFAULT;
 
-    /* eventfd for asyncio add_reader notification */
-    self->eventfd_fd = eventfd(0, 0);
+    /* eventfd for asyncio add_reader notification. EFD_NONBLOCK so poll()'s
+     * read() raises BlockingIOError when nothing is pending yet, as
+     * documented, instead of blocking the caller. */
+    self->eventfd_fd = eventfd(0, EFD_NONBLOCK);
     if (self->eventfd_fd < 0) {
         PyErr_SetFromErrno(PyExc_SystemError);
         return -1;
@@ -519,15 +535,18 @@ static int AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds) {
      *   only needed to wake a sleeping thread.  Eliminates per-op syscall
      *   overhead at sustained high QD.  EPERM on pre-5.11 kernels without
      *   CAP_SYS_NICE is treated like EINVAL (try next entry).
+     *
+     * IORING_SETUP_SINGLE_ISSUER deliberately never tried: it pins the ring
+     * to whichever thread's io_uring_setup()/io_uring_enter() call created
+     * it, rejecting submit()/flush() from any other thread with -EEXIST -
+     * this Context's own Python API makes no such thread-affinity promise.
      */
     static const uint32_t flag_table_default[] = {
-        IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_NO_SQARRAY,
-        IORING_SETUP_SINGLE_ISSUER,
+        IORING_SETUP_NO_SQARRAY,
         0,
     };
     static const uint32_t flag_table_sqpoll[] = {
-        IORING_SETUP_SQPOLL | IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_NO_SQARRAY,
-        IORING_SETUP_SQPOLL | IORING_SETUP_SINGLE_ISSUER,
+        IORING_SETUP_SQPOLL | IORING_SETUP_NO_SQARRAY,
         IORING_SETUP_SQPOLL,
         0,  /* fallback: plain ring without SQPOLL */
     };
@@ -805,6 +824,15 @@ static PyObject *AIOContext_submit(AIOContext *self, PyObject *args) {
             continue;
 
         if ((tail - head) >= capacity) {
+            /* Commit whatever WAS successfully staged earlier in this same
+             * call before returning - those ops already have in_progress=1
+             * and their own Py_INCREF applied, and their SQEs are already
+             * written into the ring buffer; without this they'd be
+             * invisible to the kernel forever (sq_tail never advanced past
+             * them) despite looking submitted from Python's side - stuck
+             * in_progress permanently, no completion ever able to arrive
+             * to clear it, and their reference leaked for good. */
+            __atomic_store_n(self->sq_tail, tail, __ATOMIC_RELEASE);
             PyErr_SetString(PyExc_OverflowError, "io_uring SQ ring full");
             return NULL;
         }
@@ -987,6 +1015,14 @@ static PyObject *AIOContext_process_events(
             &max_requests, &min_requests, &tv_sec))
         return NULL;
 
+    if (tv_sec < 0) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "timeout (%d) must not be negative", tv_sec
+        );
+        return NULL;
+    }
+
     if (max_requests == 0)
         max_requests = EV_MAX_REQUESTS_DEFAULT;
 
@@ -999,12 +1035,65 @@ static PyObject *AIOContext_process_events(
         return NULL;
     }
 
-    /* block until at least min_requests completions are available */
-    if (min_requests > 0) {
-        int ret = io_uring_enter(
-            self->uring_fd, 0, min_requests, IORING_ENTER_GETEVENTS, NULL
-        );
-        if (ret < 0) {
+    /* Wait for at least min_requests completions, bounded by `timeout`
+     * seconds. Plain io_uring_enter(GETEVENTS) has no timeout parameter of
+     * its own (unlike linux_aio's io_getevents, which takes a struct
+     * timespec directly) - `tv_sec` used to be parsed and then silently
+     * discarded entirely, so this used to block indefinitely regardless of
+     * the argument. GIL released throughout so this doesn't freeze every
+     * other thread in the interpreter for the duration. */
+    if (min_requests > 0 && tv_sec == 0) {
+        /* Fast path: timeout=0 means "check once, don't actually wait" -
+         * matching linux_aio's own io_getevents(timeout={0,0}) semantics -
+         * so skip the deadline/poll-loop machinery below entirely. */
+        int ret;
+        Py_BEGIN_ALLOW_THREADS
+        ret = io_uring_enter(self->uring_fd, 0, 0, IORING_ENTER_GETEVENTS, NULL);
+        Py_END_ALLOW_THREADS
+        if (ret < 0 && errno != EINTR) {
+            PyErr_SetFromErrno(PyExc_SystemError);
+            return NULL;
+        }
+    } else if (min_requests > 0) {
+        struct timespec deadline;
+        clock_gettime(CLOCK_MONOTONIC, &deadline);
+        deadline.tv_sec += tv_sec;
+
+        int saved_errno = 0;
+        Py_BEGIN_ALLOW_THREADS
+        for (;;) {
+            uint32_t head = __atomic_load_n(self->cq_head, __ATOMIC_RELAXED);
+            uint32_t tail = __atomic_load_n(self->cq_tail, __ATOMIC_ACQUIRE);
+            if (tail - head >= min_requests)
+                break;
+
+            int ret = io_uring_enter(
+                self->uring_fd, 0, 0, IORING_ENTER_GETEVENTS, NULL
+            );
+            if (ret < 0 && errno != EINTR) {
+                saved_errno = errno;
+                break;
+            }
+
+            head = __atomic_load_n(self->cq_head, __ATOMIC_RELAXED);
+            tail = __atomic_load_n(self->cq_tail, __ATOMIC_ACQUIRE);
+            if (tail - head >= min_requests)
+                break;
+
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            if (now.tv_sec > deadline.tv_sec || (
+                    now.tv_sec == deadline.tv_sec &&
+                    now.tv_nsec >= deadline.tv_nsec
+            )) break;
+
+            struct timespec sleep_ts = {0, 1000000}; /* 1ms */
+            nanosleep(&sleep_ts, NULL);
+        }
+        Py_END_ALLOW_THREADS
+
+        if (saved_errno != 0) {
+            errno = saved_errno;
             PyErr_SetFromErrno(PyExc_SystemError);
             return NULL;
         }
