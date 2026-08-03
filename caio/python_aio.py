@@ -1,4 +1,6 @@
 import os
+import sys
+import threading
 from collections import defaultdict
 from enum import IntEnum, unique
 from io import BytesIO
@@ -23,6 +25,13 @@ class OpCode(IntEnum):
     NOOP = -1
 
 
+@unique
+class ContextState(IntEnum):
+    OPEN = 0
+    CLOSING = 1
+    CLOSED = 2
+
+
 class Context(AbstractContext):
     """
     python aio context implementation
@@ -31,13 +40,27 @@ class Context(AbstractContext):
     MAX_POOL_SIZE = 128
 
     def __init__(self, max_requests: int = 32, pool_size: int = 8):
-        assert pool_size < self.MAX_POOL_SIZE
+        # Set before any validation that can raise: __del__ runs even on a
+        # partially-constructed object, and close() below relies on _state
+        # existing and being non-OPEN to safely no-op before ever touching
+        # _lock/pool, which aren't created until validation passes.
+        self._state = ContextState.CLOSED
+
+        if not (0 < pool_size < self.MAX_POOL_SIZE):
+            raise ValueError(
+                f"pool_size must be between 1 and {self.MAX_POOL_SIZE - 1}, "
+                f"got {pool_size}",
+            )
+        if max_requests <= 0:
+            raise ValueError(
+                f"max_requests must be a positive integer, got {max_requests}",
+            )
 
         self.__max_requests = max_requests
         self.pool = ThreadPool(pool_size)
         self._in_progress = 0
-        self._closed = False
-        self._closed_lock = Lock()
+        self._lock = Lock()
+        self._state = ContextState.OPEN
 
         if not NATIVE_PREAD_PWRITE:
             self._locks_cleaner = RLock()       # type: ignore
@@ -47,32 +70,75 @@ class Context(AbstractContext):
     def max_requests(self) -> int:
         return self.__max_requests
 
+    @staticmethod
+    def _invoke_callback(operation: "Operation", value):
+        """
+        Calls ``operation``'s callback with ``value``, if one was set via
+        ``set_callback()``. A missing callback is a normal, expected case.
+        A raising callback must not escape - this runs on ThreadPool's
+        single internal result-handler thread, and an uncaught exception
+        there kills that thread, silently stalling every future
+        result/callback for the rest of this Context's lifetime.
+        """
+        callback = operation.callback
+        if callback is None:
+            return
+
+        try:
+            callback(value)
+        except BaseException:  # noqa: BLE001 (must isolate any callback exception, including SystemExit/KeyboardInterrupt)
+            threading.excepthook(
+                threading.ExceptHookArgs(
+                    (*sys.exc_info(), threading.current_thread()),
+                ),
+            )
+
+    def _release_slot(self):
+        with self._lock:
+            self._in_progress -= 1
+
     def _execute(self, operation: "Operation"):
         handler = self._OP_MAP[operation.opcode]
 
         def on_error(exc):
-            self._in_progress -= 1
+            self._release_slot()
             operation.exception = exc
             operation.written = 0
-            operation.callback(None)
+            self._invoke_callback(operation, None)
 
         def on_success(result):
-            self._in_progress -= 1
+            self._release_slot()
             operation.written = result
-            operation.callback(result)
+            self._invoke_callback(operation, result)
 
-        if self._in_progress > self.__max_requests:
-            raise RuntimeError(
-                "Maximum simultaneous requests have been reached",
+        # Check state, capacity, and the reservation itself under one lock -
+        # otherwise two concurrent submits can both pass the capacity check
+        # before either increments, or a close() can slip in between the
+        # check and the increment.
+        with self._lock:
+            if self._state != ContextState.OPEN:
+                raise RuntimeError("Context is closed")
+
+            if self._in_progress >= self.__max_requests:
+                raise RuntimeError(
+                    "Maximum simultaneous requests have been reached",
+                )
+
+            self._in_progress += 1
+
+        try:
+            self.pool.apply_async(
+                handler, args=(self, operation),
+                callback=on_success,
+                error_callback=on_error,
             )
-
-        self._in_progress += 1
-
-        self.pool.apply_async(
-            handler, args=(self, operation),
-            callback=on_success,
-            error_callback=on_error,
-        )
+        except BaseException:
+            # Scheduling itself failed (e.g. a concurrent close() already
+            # tore down the pool) - the slot reserved above was never
+            # actually claimed by a real job, so it must be given back
+            # instead of permanently inflating _in_progress.
+            self._release_slot()
+            raise
 
     if NATIVE_PREAD_PWRITE:
         def __pread(self, fd, size, offset):
@@ -143,16 +209,17 @@ class Context(AbstractContext):
         return 0
 
     def close(self):
-        if self._closed:
+        if self._state != ContextState.OPEN:
             return
-
-        with self._closed_lock:
+        with self._lock:
+            if self._state != ContextState.OPEN:
+                return
+            self._state = ContextState.CLOSING
             self.pool.close()
-            self._closed = True
+            self._state = ContextState.CLOSED
 
     def __del__(self):
-        if self.pool.close():
-            self.close()
+        self.close()
 
     _OP_MAP = MappingProxyType({
         OpCode.READ: _handle_read,
@@ -265,5 +332,7 @@ class Operation(AbstractOperation):
         return self.__nbytes
 
     def set_callback(self, callback: Callable[[int], Any]) -> bool:
+        if not callable(callback):
+            raise ValueError(f"callback must be callable, got {callback!r}")
         self.callback = callback
         return True
