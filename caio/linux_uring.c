@@ -45,10 +45,10 @@ static inline int io_uring_register(
 #define IORING_SETUP_SQPOLL         (1U << 1)   /* Linux 5.1 */
 #endif
 #ifndef IORING_SETUP_SINGLE_ISSUER
-#define IORING_SETUP_SINGLE_ISSUER  (1U << 6)   /* Linux 6.0 */
+#define IORING_SETUP_SINGLE_ISSUER  (1U << 12)   /* Linux 6.0 */
 #endif
 #ifndef IORING_SETUP_NO_SQARRAY
-#define IORING_SETUP_NO_SQARRAY     (1U << 9)   /* Linux 6.1 */
+#define IORING_SETUP_NO_SQARRAY     (1U << 16)   /* Linux 6.1 */
 #endif
 #ifndef IORING_SQ_NEED_WAKEUP
 #define IORING_SQ_NEED_WAKEUP       (1U << 0)   /* sq_flags: kernel thread asleep */
@@ -678,20 +678,47 @@ static PyObject *AIOContext_repr(AIOContext *self) {
  * Drain all currently-available CQEs from the completion ring.
  * No syscall — reads directly from the mmap'd ring.
  * Returns number of completions processed, or -1 on Python error.
+ *
+ * The whole batch (up to `max` real completions) is scanned and the ring's
+ * own head is fully committed BEFORE any callback runs - a callback that
+ * reentrantly calls process_events()/flush() must see a ring already
+ * caught up through this entire batch, never a subset of it. Committing
+ * head incrementally, one CQE at a time right before that CQE's own
+ * callback, does not fix this: by the time callback #3 (say) runs, head
+ * would already be past #3, but a reentrant call would then race the
+ * outer loop to process #4..N itself, double-processing whichever ones
+ * both reach first - the exact same class of bug, just shifted to a
+ * different subset. Collecting the whole batch first and only invoking
+ * callbacks afterward removes the race entirely.
  */
 static int uring_drain_cq(AIOContext *self, uint32_t max) {
-    uint32_t head  = __atomic_load_n(self->cq_head, __ATOMIC_RELAXED);
-    uint32_t tail  = __atomic_load_n(self->cq_tail, __ATOMIC_ACQUIRE);
-    uint32_t mask  = *self->cq_ring_mask;
-    uint32_t count = 0;
+    uint32_t head = __atomic_load_n(self->cq_head, __ATOMIC_RELAXED);
+    uint32_t tail = __atomic_load_n(self->cq_tail, __ATOMIC_ACQUIRE);
+    uint32_t mask = *self->cq_ring_mask;
 
+    uint32_t avail = tail - head;
+    uint32_t cap = avail < max ? avail : max;
+
+    AIOOperation **ops = NULL;
+    int32_t *results = NULL;
+    if (cap > 0) {
+        ops = PyMem_New(AIOOperation *, cap);
+        results = PyMem_New(int32_t, cap);
+        if (ops == NULL || results == NULL) {
+            PyMem_Free(ops);
+            PyMem_Free(results);
+            PyErr_NoMemory();
+            return -1;
+        }
+    }
+
+    uint32_t count = 0;
     while (head != tail && count < max) {
         struct io_uring_cqe *cqe = &self->cqes[head & mask];
+        head++;
 
-        if (cqe->user_data == CANCEL_USER_DATA) {
-            head++;
+        if (cqe->user_data == CANCEL_USER_DATA)
             continue;
-        }
 
         AIOOperation *op = (AIOOperation *)(uintptr_t) cqe->user_data;
         op->in_progress = 0;
@@ -702,29 +729,38 @@ static int uring_drain_cq(AIOContext *self, uint32_t max) {
             op->buf_size = cqe->res;
         }
 
-        if (op->callback != NULL) {
-            PyObject *arg = PyLong_FromLong((long) cqe->res);
-            if (arg == NULL) {
-                __atomic_store_n(self->cq_head, head + 1, __ATOMIC_RELEASE);
-                Py_DECREF(op);
-                return -1;
-            }
-            PyObject *rv = PyObject_CallOneArg(op->callback, arg);
-            Py_DECREF(arg);
-            if (rv == NULL) {
-                __atomic_store_n(self->cq_head, head + 1, __ATOMIC_RELEASE);
-                Py_DECREF(op);
-                return -1;
-            }
-            Py_DECREF(rv);
-        }
-
-        Py_DECREF(op);
-        head++;
+        ops[count] = op;
+        results[count] = cqe->res;
         count++;
     }
 
+    /* Ring state fully committed - reentrant callers now see this whole
+     * batch as already consumed, before a single callback has run. */
     __atomic_store_n(self->cq_head, head, __ATOMIC_RELEASE);
+
+    for (uint32_t i = 0; i < count; i++) {
+        AIOOperation *op = ops[i];
+
+        if (op->callback != NULL) {
+            PyObject *arg = PyLong_FromLong((long) results[i]);
+            if (arg == NULL) {
+                PyErr_WriteUnraisable(op->callback);
+            } else {
+                PyObject *rv = PyObject_CallOneArg(op->callback, arg);
+                Py_DECREF(arg);
+                if (rv == NULL) {
+                    PyErr_WriteUnraisable(op->callback);
+                } else {
+                    Py_DECREF(rv);
+                }
+            }
+        }
+
+        Py_DECREF(op);
+    }
+
+    PyMem_Free(ops);
+    PyMem_Free(results);
     return (int) count;
 }
 
