@@ -3,11 +3,10 @@ import sys
 import threading
 from collections import defaultdict
 from enum import IntEnum, unique
-from io import BytesIO
 from multiprocessing.pool import ThreadPool
 from threading import Lock, RLock
 from types import MappingProxyType
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable
 
 from .abstract import AbstractContext, AbstractOperation
 
@@ -189,17 +188,21 @@ class Context(AbstractContext):
                 return os.write(fd, bytes)
 
     def _handle_read(self, operation: "Operation"):
-        return operation.buffer.write(
-            self.__pread(
-                operation.fileno,
-                operation.nbytes,
-                operation.offset,
-            ),
+        # Stored directly, not copied through a BytesIO - pread() already
+        # returns exactly the bytes object get_value()/payload need to hand
+        # back, and buffering it through BytesIO.write() just to unwrap it
+        # again later cost a full extra copy per read for no benefit.
+        data = self.__pread(
+            operation.fileno, operation.nbytes, operation.offset,
         )
+        operation.buffer = data
+        return len(data)
 
     def _handle_write(self, operation: "Operation"):
+        # operation.buffer is the caller's own payload bytes, unwrapped -
+        # no BytesIO round-trip needed to hand it to pwrite() either.
         return self.__pwrite(
-            operation.fileno, operation.buffer.getvalue(), operation.offset,
+            operation.fileno, operation.buffer, operation.offset,
         )
 
     def _handle_fsync(self, operation: "Operation"):
@@ -263,18 +266,22 @@ class Operation(AbstractOperation):
     def __init__(
         self,
         fd: int,
-        nbytes: Optional[int],
-        offset: Optional[int],
+        nbytes: int | None,
+        offset: int | None,
         opcode: OpCode,
-        payload: Optional[bytes] = None,
-        priority: Optional[int] = None,
+        payload: bytes | None = None,
+        priority: int | None = None,
     ):
-        self.callback = None    # type: Optional[Callable[[int], Any]]
+        self.callback: Callable[[int], Any] | None = None
         self.in_progress = False
-        self.buffer = BytesIO()
-
-        if opcode == OpCode.WRITE and payload:
-            self.buffer = BytesIO(payload)
+        # Plain bytes, not a BytesIO wrapper - for a write this is the
+        # caller's own payload, handed to pwrite() as-is (falling back to
+        # b"" for a falsy/omitted payload, e.g. an explicit zero-byte
+        # write); for a read it starts empty and _handle_read() replaces
+        # it with pread()'s result directly. Either way there's nothing to
+        # unwrap later, so get_value()/payload return it with no extra
+        # copy - and it's never None, so callers don't need to check.
+        self.buffer: bytes = payload or b"" if opcode == OpCode.WRITE else b""
 
         self.opcode = opcode
         self.__fileno = fd
@@ -326,7 +333,7 @@ class Operation(AbstractOperation):
         """
         return cls(fd, None, None, opcode=OpCode.FDSYNC, priority=priority)
 
-    def get_value(self) -> Union[bytes, int]:
+    def get_value(self) -> bytes | int:
         """
         Method returns a bytes value of AIOOperation's result or None.
         """
@@ -336,10 +343,7 @@ class Operation(AbstractOperation):
         if self.opcode == OpCode.WRITE:
             return self.written
 
-        if self.buffer is None:
-            return
-
-        return self.buffer.getvalue()
+        return self.buffer
 
     @property
     def fileno(self) -> int:
@@ -350,8 +354,8 @@ class Operation(AbstractOperation):
         return self.__offset
 
     @property
-    def payload(self) -> Optional[memoryview]:
-        return self.buffer.getbuffer()
+    def payload(self) -> memoryview | None:
+        return memoryview(self.buffer)
 
     @property
     def nbytes(self) -> int:
