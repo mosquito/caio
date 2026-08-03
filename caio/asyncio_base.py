@@ -5,9 +5,8 @@ from functools import partial
 
 from . import abstract
 
-
-ContextType = typing.Type[abstract.AbstractContext]
-OperationType = typing.Type[abstract.AbstractOperation]
+ContextType = type[abstract.AbstractContext]
+OperationType = type[abstract.AbstractOperation]
 
 
 class AsyncioContextBase(abc.ABC):
@@ -38,14 +37,14 @@ class AsyncioContextBase(abc.ABC):
 
     async def submit(self, op):
         if not isinstance(op, self.OPERATION_CLASS):
-            raise ValueError("Operation object expected")
+            raise ValueError("Operation object expected")  # noqa: TRY004 (pre-existing public exception type, not changing it here)
 
         future = self.loop.create_future()
         op.set_callback(partial(self._on_done, future))
 
         async with self.semaphore:
             if self.context.submit(op) != 1:
-                raise IOError("Operation was not submitted")
+                raise OSError("Operation was not submitted")
 
             self._on_submitted()
 

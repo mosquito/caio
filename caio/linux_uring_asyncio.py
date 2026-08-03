@@ -34,6 +34,22 @@ class AsyncioContext(AsyncioContextBase):
 
     def _on_read_event(self):
         """Handle completions signalled via the eventfd."""
-        self.context.poll()
+        # poll() raises BlockingIOError whenever the eventfd's counter
+        # reads as zero - possible even right after epoll reported this fd
+        # readable (e.g. the kernel coalesces multiple completions into one
+        # counter increment, and the ones beyond the first can still be
+        # landing in the CQ ring at the moment poll() runs). Letting that
+        # exception escape used to skip process_events() entirely for this
+        # wakeup - draining is independent of the eventfd count (it reads
+        # the CQ ring directly), so a stale/absent counter is never a
+        # reason to skip it, only silently stranding whatever was already
+        # completed with no other event left to wake this Context up
+        # again. Confirmed to actually hang a real (non-tmpfs) benchmark
+        # run this way - inline tmpfs completions never exercise this path
+        # at all, since they never reach the eventfd in the first place.
+        try:
+            self.context.poll()
+        except BlockingIOError:
+            pass
         while self.context.process_events():
             pass

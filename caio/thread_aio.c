@@ -21,6 +21,7 @@ typedef struct {
     threadpool_t* pool;
     uint16_t max_requests;
     uint8_t pool_size;
+    PyObject* weakreflist;
 } AIOContext;
 
 
@@ -34,9 +35,19 @@ typedef struct {
     int result;
     uint8_t error;
     uint8_t in_progress;
+    uint8_t done;   /* genuine completion reached - set via a release
+                     * store by worker() before it ever touches the GIL,
+                     * and read via an acquire load from payload/
+                     * get_value() (both always GIL-held); this ordering
+                     * is what makes result/buf_size/error - written by
+                     * worker() on its own thread, without the GIL -
+                     * safe to read once done is observed true. Distinct
+                     * from in_progress, which is sticky forever and
+                     * guards resubmission instead. */
     Py_ssize_t buf_size;
     char* buf;
     PyObject* ctx;
+    PyObject* weakreflist;
 } AIOOperation;
 
 
@@ -51,11 +62,28 @@ enum THAIO_OP_CODE {
 
 static void
 AIOContext_dealloc(AIOContext *self) {
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
     if (self->pool != 0) {
         threadpool_t* pool = self->pool;
         self->pool = 0;
 
-        threadpool_destroy(pool, 0);
+        // Graceful, not immediate: an immediate shutdown drops any task
+        // still sitting in the queue without ever running worker() on it,
+        // permanently leaking the Py_INCREF'd Operation/Context references
+        // taken at submit() time (this Context can in fact still be
+        // reachable here with work queued - e.g. interpreter shutdown, not
+        // just normal refcounting). GIL released around the call: waiting
+        // for worker threads (via pthread_join inside threadpool_destroy)
+        // would otherwise deadlock, since those workers need to reacquire
+        // the GIL themselves (PyGILState_Ensure() in worker()) to invoke
+        // callbacks/decref, and this thread already holds it. No bound on
+        // how long this can block if a queued op is stuck on slow/hung I/O
+        // - accepted as a known limitation, not fixed here.
+        Py_BEGIN_ALLOW_THREADS
+        threadpool_destroy(pool, threadpool_graceful);
+        Py_END_ALLOW_THREADS
     }
 
     Py_TYPE(self)->tp_free((PyObject *) self);
@@ -190,6 +218,15 @@ void worker(void *arg) {
     if (op->opcode == THAIO_READ) {
         op->buf_size = result;
     }
+
+    /* Release store, paired with payload/get_value()'s acquire load of
+     * done - the plain writes to result/error/buf_size above happen on
+     * this thread without holding the GIL, so without a real memory
+     * barrier a concurrent GIL-holding reader on another thread has no
+     * guarantee of ever observing them (or of observing them in this
+     * order), regardless of in_progress. */
+    __atomic_store_n(&op->done, 1, __ATOMIC_RELEASE);
+
     state = PyGILState_Ensure();
     if (op->callback != NULL) {
         PyObject_CallFunction(op->callback, "i", result);
@@ -269,40 +306,72 @@ static PyObject* AIOContext_submit(
         return NULL;
     }
 
-    unsigned int nr = PyTuple_Size(args);
-
+    Py_ssize_t nr = PyTuple_Size(args);
+    Py_ssize_t i;
     PyObject* obj;
-    AIOOperation* ops[nr];
-    unsigned int i;
+
+    // Heap-allocated rather than a stack VLA sized by the caller-controlled
+    // tuple length - *ops(*a_huge_tuple) must not be able to overflow the
+    // stack.
+    AIOOperation** ops = NULL;
+    if (nr > 0) {
+        ops = PyMem_New(AIOOperation*, nr);
+        if (ops == NULL) {
+            PyErr_NoMemory();
+            return NULL;
+        }
+    }
 
     for (i=0; i < nr; i++) {
         obj = PyTuple_GetItem(args, i);
         if (PyObject_TypeCheck(obj, &AIOOperationType) == 0) {
             PyErr_Format(
                 PyExc_TypeError,
-                "Wrong type for argument %d", i
+                "Wrong type for argument %zd", i
             );
-
+            PyMem_Free(ops);
             return NULL;
         }
 
         ops[i] = (AIOOperation*) obj;
-        ops[i]->ctx = (void*) self;
     }
 
-    unsigned int j=0;
+    Py_ssize_t j=0;
     int result = 0;
 
     for (i=0; i < nr; i++) {
         if (ops[i]->in_progress) continue;
+
+        // Claim the op (mark in_progress, set ctx, take references) only
+        // right before actually handing it to the pool - previously this
+        // was done for every argument up front, in the first loop above,
+        // even for ops this call was about to skip as already in_progress.
+        // That silently overwrote an in-flight op's ctx pointer with no
+        // matching incref, leaking the old Context's reference and leaving
+        // the original worker()'s eventual Py_DECREF(ctx) to decrement the
+        // wrong (new) Context instead - a real use-after-free/over-decref
+        // risk, not just a leak. A threadpool_add() failure below must
+        // also leave this op exactly as retryable as before this call,
+        // not permanently stuck in_progress=1 with no worker ever assigned
+        // to clear it.
         ops[i]->in_progress = 1;
+        ops[i]->ctx = (void*) self;
         Py_INCREF(ops[i]);
-        Py_INCREF(ops[i]->ctx);
+        Py_INCREF(self);
+
         result = threadpool_add(self->pool, worker, (void*) ops[i], 0);
-        if (process_pool_error(result) < 0) return NULL;
+        if (process_pool_error(result) < 0) {
+            ops[i]->in_progress = 0;
+            ops[i]->ctx = NULL;
+            Py_DECREF(ops[i]);
+            Py_DECREF(self);
+            PyMem_Free(ops);
+            return NULL;
+        }
         j++;
     }
 
+    PyMem_Free(ops);
     return (PyObject*) PyLong_FromSsize_t(j);
 }
 
@@ -367,20 +436,55 @@ AIOContextType = {
     .tp_dealloc = (destructor) AIOContext_dealloc,
     .tp_members = AIOContext_members,
     .tp_methods = AIOContext_methods,
-    .tp_repr = (reprfunc) AIOContext_repr
+    .tp_repr = (reprfunc) AIOContext_repr,
+    .tp_weaklistoffset = offsetof(AIOContext, weakreflist)
 };
 
 
-static void
-AIOOperation_dealloc(AIOOperation *self) {
+static int
+AIOOperation_traverse(AIOOperation *self, visitproc visit, void *arg) {
+    Py_VISIT(self->callback);
+    Py_VISIT(self->py_buffer);
+    Py_VISIT(self->ctx);
+    return 0;
+}
+
+
+static int
+AIOOperation_clear(AIOOperation *self) {
     Py_CLEAR(self->callback);
 
+    /* self->buf is a separate PyMem_Calloc allocation py_buffer's own
+     * memoryview only views, not owns - clearing py_buffer alone would
+     * leak it (and, if this runs before this Operation's own eventual
+     * dealloc, that dealloc's identical free-then-NULL below prevents a
+     * double free only because this already set it to NULL). */
     if ((self->opcode == THAIO_READ) && self->buf != NULL) {
         PyMem_Free(self->buf);
         self->buf = NULL;
     }
 
     Py_CLEAR(self->py_buffer);
+
+    /* Normally already NULL by any point tp_clear/dealloc could run -
+     * worker() clears it before ever touching the GIL again - but that's
+     * only true once genuinely dispatched; cleared here too in case a
+     * cyclic collection runs during the narrow submit()-to-dispatch
+     * window where it's still set. */
+    Py_CLEAR(self->ctx);
+
+    return 0;
+}
+
+
+static void
+AIOOperation_dealloc(AIOOperation *self) {
+    PyObject_GC_UnTrack(self);
+
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
+    AIOOperation_clear(self);
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
@@ -446,6 +550,8 @@ static PyObject* AIOOperation_read(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
+    self->weakreflist = NULL;
 
     uint64_t nbytes = 0;
     uint16_t priority;
@@ -458,9 +564,22 @@ static PyObject* AIOOperation_read(
         &priority
     );
 
-    if (!argIsOk) return NULL;
+    if (!argIsOk) {
+        Py_DECREF(self);
+        return NULL;
+    }
 
+    // PyMem_Calloc can return NULL for a large enough (or just
+    // OOM-at-the-time) nbytes - proceeding with a NULL buf would hand the
+    // kernel (via pread() in worker()) and PyMemoryView_FromMemory a NULL
+    // pointer with a nonzero declared size, corrupting memory instead of
+    // raising a catchable error.
     self->buf = PyMem_Calloc(nbytes, sizeof(char));
+    if (self->buf == NULL && nbytes > 0) {
+        Py_DECREF(self);
+        PyErr_NoMemory();
+        return NULL;
+    }
     self->buf_size = nbytes;
 
     self->py_buffer = PyMemoryView_FromMemory(
@@ -468,6 +587,11 @@ static PyObject* AIOOperation_read(
         self->buf_size,
         PyBUF_READ
     );
+
+    if (self->py_buffer == NULL) {
+        Py_DECREF(self);
+        return NULL;
+    }
 
     self->opcode = THAIO_READ;
 
@@ -505,19 +629,31 @@ static PyObject* AIOOperation_write(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
+    self->weakreflist = NULL;
+
+    // Parsed into a plain local first, not directly into self->py_buffer:
+    // "O" hands back a borrowed reference, and self->py_buffer must never
+    // hold one - AIOOperation_dealloc unconditionally Py_CLEARs it. Only
+    // assigned (and incref'd) below once it's confirmed to actually be the
+    // bytes object this Operation is going to own.
+    PyObject* payload_bytes = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "OI|LH", kwlist,
-        &(self->py_buffer),
+        &payload_bytes,
         &(self->fileno),
         &(self->offset),
         &priority
     );
 
-    if (!argIsOk) return NULL;
+    if (!argIsOk) {
+        Py_DECREF(self);
+        return NULL;
+    }
 
-    if (!PyBytes_Check(self->py_buffer)) {
-        Py_XDECREF(self);
+    if (!PyBytes_Check(payload_bytes)) {
+        Py_DECREF(self);
         PyErr_SetString(
             PyExc_ValueError,
             "payload_bytes argument must be bytes"
@@ -528,11 +664,11 @@ static PyObject* AIOOperation_write(
     self->opcode = THAIO_WRITE;
 
     if (PyBytes_AsStringAndSize(
-            self->py_buffer,
+            payload_bytes,
             &self->buf,
             &self->buf_size
     )) {
-        Py_XDECREF(self);
+        Py_DECREF(self);
         PyErr_SetString(
             PyExc_RuntimeError,
             "Can not convert bytes to c string"
@@ -540,6 +676,7 @@ static PyObject* AIOOperation_write(
         return NULL;
     }
 
+    self->py_buffer = payload_bytes;
     Py_INCREF(self->py_buffer);
 
 	return (PyObject*) self;
@@ -575,6 +712,8 @@ static PyObject* AIOOperation_fsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
+    self->weakreflist = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "I|H", kwlist,
@@ -582,7 +721,10 @@ static PyObject* AIOOperation_fsync(
         &priority
     );
 
-    if (!argIsOk) return NULL;
+    if (!argIsOk) {
+        Py_DECREF(self);
+        return NULL;
+    }
 
     self->opcode = THAIO_FSYNC;
 
@@ -617,6 +759,8 @@ static PyObject* AIOOperation_fdsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->done = 0;
+    self->weakreflist = NULL;
     uint16_t priority;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
@@ -625,7 +769,10 @@ static PyObject* AIOOperation_fdsync(
         &priority
     );
 
-    if (!argIsOk) return NULL;
+    if (!argIsOk) {
+        Py_DECREF(self);
+        return NULL;
+    }
 
     self->opcode = THAIO_FDSYNC;
 
@@ -643,6 +790,14 @@ PyDoc_STRVAR(AIOOperation_get_value_docstring,
 static PyObject* AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
 ) {
+    if (self->in_progress && !__atomic_load_n(&self->done, __ATOMIC_ACQUIRE)) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "get_value() is not available while the operation is in flight"
+        );
+        return NULL;
+    }
+
     if (self->error != 0) {
         PyErr_SetString(
             PyExc_SystemError,
@@ -654,6 +809,15 @@ static PyObject* AIOOperation_get_value(
 
     switch (self->opcode) {
         case THAIO_READ:
+            /* self->buf can only be NULL here if tp_clear() already ran -
+             * only possible once this Operation is otherwise unreachable
+             * (see AIOOperation_traverse/_clear), so nothing could
+             * actually be waiting on this return value, but degrade to
+             * None rather than hand out an uninitialized buffer either
+             * way (PyBytes_FromStringAndSize(NULL, n>0) doesn't crash,
+             * it silently returns garbage). */
+            if (self->buf == NULL)
+                Py_RETURN_NONE;
             return PyBytes_FromStringAndSize(
                 self->buf, self->buf_size
             );
@@ -662,7 +826,7 @@ static PyObject* AIOOperation_get_value(
             return PyLong_FromSsize_t(self->result);
     }
 
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
 
@@ -703,6 +867,37 @@ static PyObject* AIOOperation_set_callback(
     Py_RETURN_TRUE;
 }
 
+
+static PyObject *AIOOperation_payload_getter(AIOOperation *self, void *closure) {
+    if (self->in_progress && !__atomic_load_n(&self->done, __ATOMIC_ACQUIRE)) {
+        PyErr_SetString(
+            PyExc_RuntimeError,
+            "payload is not available while the operation is in flight"
+        );
+        return NULL;
+    }
+
+    /* fsync/fdsync Operations never allocate a buffer, and a completed
+     * write's is freed right after its callback runs (see worker()) -
+     * matches T_OBJECT's (as opposed to T_OBJECT_EX's) own NULL-to-None
+     * behavior, which this getter replaces. */
+    if (self->py_buffer == NULL)
+        Py_RETURN_NONE;
+
+    Py_INCREF(self->py_buffer);
+    return self->py_buffer;
+}
+
+
+static PyGetSetDef AIOOperation_getset[] = {
+    {
+        "payload", (getter) AIOOperation_payload_getter, NULL,
+        "payload", NULL
+    },
+    {NULL}
+};
+
+
 /*
     AIOOperation properties
 */
@@ -716,11 +911,6 @@ static PyMemberDef AIOOperation_members[] = {
         "offset", T_ULONGLONG,
         offsetof(AIOOperation, offset),
         READONLY, "offset"
-    },
-    {
-        "payload", T_OBJECT,
-        offsetof(AIOOperation, py_buffer),
-        READONLY, "payload"
     },
     {
         "nbytes", T_ULONGLONG,
@@ -791,11 +981,15 @@ AIOOperationType = {
     .tp_doc = "thread aio operation representation",
     .tp_basicsize = sizeof(AIOOperation),
     .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_dealloc = (destructor) AIOOperation_dealloc,
+    .tp_traverse = (traverseproc) AIOOperation_traverse,
+    .tp_clear = (inquiry) AIOOperation_clear,
     .tp_members = AIOOperation_members,
+    .tp_getset = AIOOperation_getset,
     .tp_methods = AIOOperation_methods,
-    .tp_repr = (reprfunc) AIOOperation_repr
+    .tp_repr = (reprfunc) AIOOperation_repr,
+    .tp_weaklistoffset = offsetof(AIOOperation, weakreflist)
 };
 
 

@@ -3,8 +3,9 @@ import platform
 import sys
 from subprocess import check_output
 
-import caio
 import pytest
+
+import caio
 
 
 @pytest.fixture(params=caio.variants)
@@ -18,7 +19,7 @@ def implementation(request):
     if request.param is caio.python_aio:
         return "python"
 
-    raise RuntimeError("Unknown variant %r" % (request.param,))
+    raise RuntimeError(f"Unknown variant {request.param!r}")
 
 
 @pytest.mark.skipif(platform.system() == 'Windows', reason="Windows skip")

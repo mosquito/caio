@@ -1,5 +1,6 @@
 import abc
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 
 class AbstractContext(abc.ABC):
@@ -55,7 +56,7 @@ class AbstractOperation(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def get_value(self) -> Union[bytes, int]:
+    def get_value(self) -> bytes | int | None:
         """
         Method returns a bytes value of AIOOperation's result or None.
         """
@@ -73,7 +74,7 @@ class AbstractOperation(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def payload(self) -> Optional[Union[bytes, memoryview]]:
+    def payload(self) -> bytes | memoryview | None:
         raise NotImplementedError
 
     @property
