@@ -21,6 +21,7 @@ typedef struct {
     threadpool_t* pool;
     uint16_t max_requests;
     uint8_t pool_size;
+    PyObject* weakreflist;
 } AIOContext;
 
 
@@ -37,6 +38,7 @@ typedef struct {
     Py_ssize_t buf_size;
     char* buf;
     PyObject* ctx;
+    PyObject* weakreflist;
 } AIOOperation;
 
 
@@ -51,6 +53,9 @@ enum THAIO_OP_CODE {
 
 static void
 AIOContext_dealloc(AIOContext *self) {
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
     if (self->pool != 0) {
         threadpool_t* pool = self->pool;
         self->pool = 0;
@@ -413,12 +418,16 @@ AIOContextType = {
     .tp_dealloc = (destructor) AIOContext_dealloc,
     .tp_members = AIOContext_members,
     .tp_methods = AIOContext_methods,
-    .tp_repr = (reprfunc) AIOContext_repr
+    .tp_repr = (reprfunc) AIOContext_repr,
+    .tp_weaklistoffset = offsetof(AIOContext, weakreflist)
 };
 
 
 static void
 AIOOperation_dealloc(AIOOperation *self) {
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
     Py_CLEAR(self->callback);
 
     if ((self->opcode == THAIO_READ) && self->buf != NULL) {
@@ -492,6 +501,7 @@ static PyObject* AIOOperation_read(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->weakreflist = NULL;
 
     uint64_t nbytes = 0;
     uint16_t priority;
@@ -569,6 +579,7 @@ static PyObject* AIOOperation_write(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->weakreflist = NULL;
 
     // Parsed into a plain local first, not directly into self->py_buffer:
     // "O" hands back a borrowed reference, and self->py_buffer must never
@@ -650,6 +661,7 @@ static PyObject* AIOOperation_fsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->weakreflist = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "I|H", kwlist,
@@ -695,6 +707,7 @@ static PyObject* AIOOperation_fdsync(
     self->buf = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->weakreflist = NULL;
     uint16_t priority;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
@@ -876,7 +889,8 @@ AIOOperationType = {
     .tp_dealloc = (destructor) AIOOperation_dealloc,
     .tp_members = AIOOperation_members,
     .tp_methods = AIOOperation_methods,
-    .tp_repr = (reprfunc) AIOOperation_repr
+    .tp_repr = (reprfunc) AIOOperation_repr,
+    .tp_weaklistoffset = offsetof(AIOOperation, weakreflist)
 };
 
 

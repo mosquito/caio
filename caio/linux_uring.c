@@ -85,6 +85,7 @@ typedef struct {
     PyObject   *py_buffer;   /* memoryview (read) or bytes (write) */
     PyObject   *callback;
     PyObject   *context;     /* owning Context, held only while in flight */
+    PyObject   *weakreflist;
     uint8_t     opcode;      /* URING_* enum */
     uint32_t    fileno;
     uint64_t    offset;
@@ -97,6 +98,9 @@ typedef struct {
 
 
 static void AIOOperation_dealloc(AIOOperation *self) {
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
     Py_CLEAR(self->callback);
     Py_CLEAR(self->context);
 
@@ -144,6 +148,7 @@ static PyObject *AIOOperation_read(
     self->py_buffer = NULL;
     self->in_progress = 0;
     self->context = NULL;
+    self->weakreflist = NULL;
     self->callback = NULL;
     self->error = 0;
 
@@ -196,6 +201,7 @@ static PyObject *AIOOperation_write(
     self->py_buffer = NULL;
     self->in_progress = 0;
     self->context = NULL;
+    self->weakreflist = NULL;
     self->callback = NULL;
     self->error = 0;
 
@@ -253,6 +259,7 @@ static PyObject *AIOOperation_fsync(
     self->py_buffer = NULL;
     self->in_progress = 0;
     self->context = NULL;
+    self->weakreflist = NULL;
     self->callback = NULL;
     self->error = 0;
 
@@ -288,6 +295,7 @@ static PyObject *AIOOperation_fdsync(
     self->py_buffer = NULL;
     self->in_progress = 0;
     self->context = NULL;
+    self->weakreflist = NULL;
     self->callback = NULL;
     self->error = 0;
 
@@ -437,6 +445,7 @@ static PyTypeObject AIOOperationType = {
     .tp_repr      = (reprfunc)   AIOOperation_repr,
     .tp_members   = AIOOperation_members,
     .tp_methods   = AIOOperation_methods,
+    .tp_weaklistoffset = offsetof(AIOOperation, weakreflist),
 };
 
 
@@ -475,10 +484,15 @@ typedef struct {
 
     uint8_t  no_sqarray;   /* IORING_SETUP_NO_SQARRAY was used */
     uint8_t  sqpoll;       /* IORING_SETUP_SQPOLL was used */
+
+    PyObject *weakreflist;
 } AIOContext;
 
 
 static void AIOContext_dealloc(AIOContext *self) {
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
     if (self->sq_ring_ptr != MAP_FAILED && self->sq_ring_ptr != NULL)
         munmap(self->sq_ring_ptr, self->sq_ring_size);
     if (self->sqes != MAP_FAILED && self->sqes != NULL)
@@ -499,6 +513,7 @@ static void AIOContext_dealloc(AIOContext *self) {
 static PyObject *AIOContext_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
     AIOContext *self = (AIOContext *) type->tp_alloc(type, 0);
     if (self != NULL) {
+        self->weakreflist = NULL;
         self->uring_fd    = -1;
         self->eventfd_fd  = -1;
         self->sq_ring_ptr = MAP_FAILED;
@@ -1214,6 +1229,7 @@ static PyTypeObject AIOContextType = {
     .tp_repr      = (reprfunc) AIOContext_repr,
     .tp_members   = AIOContext_members,
     .tp_methods   = AIOContext_methods,
+    .tp_weaklistoffset = offsetof(AIOContext, weakreflist),
 };
 
 

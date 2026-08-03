@@ -128,6 +128,7 @@ typedef struct {
     aio_context_t ctx;
     int32_t fileno;
     uint32_t max_requests;
+    PyObject* weakreflist;
 } AIOContext;
 
 
@@ -140,6 +141,7 @@ typedef struct {
     int error;
     uint8_t in_progress;
     struct iocb iocb;
+    PyObject* weakreflist;
 } AIOOperation;
 
 
@@ -149,6 +151,9 @@ static PyTypeObject* AIOContextTypeP = NULL;
 
 static void
 AIOContext_dealloc(AIOContext *self) {
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
     if (self->ctx != 0) {
         aio_context_t ctx = self->ctx;
         self->ctx = 0;
@@ -622,12 +627,16 @@ AIOContextType = {
     .tp_dealloc = (destructor) AIOContext_dealloc,
     .tp_members = AIOContext_members,
     .tp_methods = AIOContext_methods,
-    .tp_repr = (reprfunc) AIOContext_repr
+    .tp_repr = (reprfunc) AIOContext_repr,
+    .tp_weaklistoffset = offsetof(AIOContext, weakreflist)
 };
 
 
 static void
 AIOOperation_dealloc(AIOOperation *self) {
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
     Py_CLEAR(self->context);
     Py_CLEAR(self->callback);
 
@@ -705,6 +714,7 @@ static PyObject* AIOOperation_read(
     self->buffer = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->weakreflist = NULL;
 
     uint64_t nbytes = 0;
 
@@ -777,6 +787,7 @@ static PyObject* AIOOperation_write(
     self->buffer = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->weakreflist = NULL;
 
     Py_ssize_t nbytes = 0;
 
@@ -864,6 +875,7 @@ static PyObject* AIOOperation_fsync(
     self->buffer = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->weakreflist = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "I|h", kwlist,
@@ -912,6 +924,7 @@ static PyObject* AIOOperation_fdsync(
     self->buffer = NULL;
     self->py_buffer = NULL;
     self->in_progress = 0;
+    self->weakreflist = NULL;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
             args, kwds, "I|h", kwlist,
@@ -1093,7 +1106,8 @@ AIOOperationType = {
     .tp_dealloc = (destructor) AIOOperation_dealloc,
     .tp_members = AIOOperation_members,
     .tp_methods = AIOOperation_methods,
-    .tp_repr = (reprfunc) AIOOperation_repr
+    .tp_repr = (reprfunc) AIOOperation_repr,
+    .tp_weaklistoffset = offsetof(AIOOperation, weakreflist)
 };
 
 
