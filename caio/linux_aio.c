@@ -408,8 +408,14 @@ static PyObject* AIOContext_cancel(AIOContext *self, PyObject *args, PyObject *k
 }
 
 PyDoc_STRVAR(AIOContext_process_events_docstring,
-    "Gather events for Context. \n\n"
-    "    Operation.process_events(max_events, min_events) -> Tuple[Tuple[]]"
+    "Gather events for Context.\n\n"
+    "    Context.process_events(max_requests=512, min_requests=0, timeout=0) -> int\n\n"
+    "    timeout=0 checks once and returns immediately. timeout>0 blocks up\n"
+    "    to that many seconds; timeout<0 blocks indefinitely. Both are for\n"
+    "    manual synchronous polling from a plain thread - do not also\n"
+    "    select()/poll() on `.fileno` from elsewhere while relying on this\n"
+    "    to wait, the two waiting mechanisms are alternatives, not meant to\n"
+    "    be combined on the same Context."
 );
 static PyObject* AIOContext_process_events(
     AIOContext *self, PyObject *args, PyObject *kwds
@@ -431,17 +437,16 @@ static PyObject* AIOContext_process_events(
         &max_requests, &min_requests, &tv_sec
     )) { return NULL; }
 
-    /* A negative timeout, passed straight through to io_getevents() as-is,
-     * surfaces only as an opaque kernel EINVAL (SystemError) instead of a
-     * clear error raised at the boundary. */
-    if (tv_sec < 0) {
-        PyErr_Format(
-            PyExc_ValueError,
-            "timeout (%d) must not be negative", tv_sec
-        );
-        return NULL;
+    /* timeout<0 means "wait indefinitely" - io_getevents() itself takes a
+     * NULL timeout to mean exactly that, so no emulation is needed here
+     * (unlike linux_uring, whose io_uring_enter() has no native timeout
+     * parameter at all). timeout=0 is a non-blocking check; timeout>0
+     * bounds the wait. */
+    struct timespec *timeout_arg = NULL;
+    if (tv_sec >= 0) {
+        timeout.tv_sec = tv_sec;
+        timeout_arg = &timeout;
     }
-    timeout.tv_sec = tv_sec;
 
     if (max_requests == 0) {
         max_requests = EV_MAX_REQUESTS_DEFAULT;
@@ -486,7 +491,7 @@ static PyObject* AIOContext_process_events(
         min_requests,
         max_requests,
         events,
-        &timeout
+        timeout_arg
     );
     Py_END_ALLOW_THREADS
 

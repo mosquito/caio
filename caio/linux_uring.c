@@ -4,6 +4,8 @@
  */
 
 #include <errno.h>
+#include <limits.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1108,7 +1110,14 @@ static PyObject *AIOContext_cancel(
 
 PyDoc_STRVAR(AIOContext_process_events_docstring,
     "Collects completed operations and fires their callbacks.\n\n"
-    "    Context.process_events(max_requests=512, min_requests=0, timeout=0) -> int"
+    "    Context.process_events(max_requests=512, min_requests=0, timeout=0) -> int\n\n"
+    "    timeout=0 checks once and returns immediately (the usual asyncio-\n"
+    "    adapter path - real waiting happens via the eventfd/loop.add_reader()\n"
+    "    instead). timeout>0 blocks up to that many seconds; timeout<0 blocks\n"
+    "    indefinitely. Both are for manual synchronous polling from a plain\n"
+    "    thread - do not also select()/poll() on `.fileno` from elsewhere\n"
+    "    while relying on this to wait, the two waiting mechanisms are\n"
+    "    alternatives, not meant to be combined on the same Context."
 );
 static PyObject *AIOContext_process_events(
     AIOContext *self, PyObject *args, PyObject *kwds
@@ -1124,14 +1133,6 @@ static PyObject *AIOContext_process_events(
             &max_requests, &min_requests, &tv_sec))
         return NULL;
 
-    if (tv_sec < 0) {
-        PyErr_Format(
-            PyExc_ValueError,
-            "timeout (%d) must not be negative", tv_sec
-        );
-        return NULL;
-    }
-
     if (max_requests == 0)
         max_requests = EV_MAX_REQUESTS_DEFAULT;
 
@@ -1144,13 +1145,14 @@ static PyObject *AIOContext_process_events(
         return NULL;
     }
 
-    /* Wait for at least min_requests completions, bounded by `timeout`
-     * seconds. Plain io_uring_enter(GETEVENTS) has no timeout parameter of
-     * its own (unlike linux_aio's io_getevents, which takes a struct
-     * timespec directly) - `tv_sec` used to be parsed and then silently
-     * discarded entirely, so this used to block indefinitely regardless of
-     * the argument. GIL released throughout so this doesn't freeze every
-     * other thread in the interpreter for the duration. */
+    /* Wait for at least min_requests completions: timeout=0 checks once,
+     * timeout>0 bounds the wait, timeout<0 waits indefinitely. Plain
+     * io_uring_enter(GETEVENTS) has no timeout parameter of its own (unlike
+     * linux_aio's io_getevents, which takes a struct timespec directly) -
+     * `tv_sec` used to be parsed and then silently discarded entirely, so
+     * this used to always block indefinitely regardless of the argument.
+     * GIL released throughout so this doesn't freeze every other thread in
+     * the interpreter for the duration. */
     if (min_requests > 0 && tv_sec == 0) {
         /* Fast path: timeout=0 means "check once, don't actually wait" -
          * matching linux_aio's own io_getevents(timeout={0,0}) semantics -
@@ -1164,9 +1166,12 @@ static PyObject *AIOContext_process_events(
             return NULL;
         }
     } else if (min_requests > 0) {
+        int has_deadline = tv_sec > 0;
         struct timespec deadline;
-        clock_gettime(CLOCK_MONOTONIC, &deadline);
-        deadline.tv_sec += tv_sec;
+        if (has_deadline) {
+            clock_gettime(CLOCK_MONOTONIC, &deadline);
+            deadline.tv_sec += tv_sec;
+        }
 
         int saved_errno = 0;
         Py_BEGIN_ALLOW_THREADS
@@ -1189,15 +1194,51 @@ static PyObject *AIOContext_process_events(
             if (tail - head >= min_requests)
                 break;
 
-            struct timespec now;
-            clock_gettime(CLOCK_MONOTONIC, &now);
-            if (now.tv_sec > deadline.tv_sec || (
-                    now.tv_sec == deadline.tv_sec &&
-                    now.tv_nsec >= deadline.tv_nsec
-            )) break;
+            int poll_timeout_ms = -1;   /* poll()'s own "block indefinitely" */
+            if (has_deadline) {
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                int64_t remaining_ms = (int64_t) (deadline.tv_sec - now.tv_sec) * 1000
+                    + (deadline.tv_nsec - now.tv_nsec) / 1000000;
+                if (remaining_ms <= 0)
+                    break;
+                poll_timeout_ms = remaining_ms > INT_MAX ? INT_MAX : (int) remaining_ms;
+            }
 
-            struct timespec sleep_ts = {0, 1000000}; /* 1ms */
-            nanosleep(&sleep_ts, NULL);
+            /* Block on the eventfd (the same fd loop.add_reader() watches
+             * for the asyncio adapter) instead of busy-polling with a fixed
+             * sleep interval - the kernel signals it the instant a
+             * completion posts, so this wakes up immediately rather than up
+             * to one poll interval late. A fixed-interval nanosleep() here
+             * previously meant every wait effectively cost at least one
+             * full interval, regardless of how quickly the completion
+             * actually arrived - severe at low concurrency, where each
+             * operation pays that cost on its own.
+             *
+             * This blocking path and the asyncio adapter's own eventfd
+             * wakeup are alternative ways to wait, not meant to be combined
+             * on the same Context (see the docstring) - so no separate
+             * defense against racing some other waiter's read() of the
+             * counter is needed here beyond what's already true of any
+             * multi-waiter poll()/epoll on one fd (all current waiters see
+             * readiness once the counter goes above zero; whoever's read()
+             * clears it doesn't retroactively un-wake anyone who already
+             * observed it). */
+            struct pollfd pfd = { .fd = self->eventfd_fd, .events = POLLIN };
+            int pret = poll(&pfd, 1, poll_timeout_ms);
+            if (pret < 0 && errno != EINTR) {
+                saved_errno = errno;
+                break;
+            }
+            if (pret > 0 && (pfd.revents & POLLIN)) {
+                uint64_t val;
+                /* EFD_NONBLOCK: a short/failed read here just means
+                 * something else already drained the counter - harmless,
+                 * the loop re-checks the ring regardless. */
+                if (read(self->eventfd_fd, &val, sizeof(val)) < 0) {
+                    /* nothing to do - see comment above */
+                }
+            }
         }
         Py_END_ALLOW_THREADS
 

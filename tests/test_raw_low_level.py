@@ -1034,27 +1034,50 @@ def test_linux_aio_process_events_max_requests_is_bounded(backend):
     )
 
 
-def test_linux_aio_process_events_negative_timeout_raises_cleanly(backend):
-    """linux_aio only: process_events(timeout=-1) must raise ValueError, not
-    panic. A negative `timeout` cast straight to `tv_sec` and then to `u64`
-    wraps around to a huge duration, and `Instant::now() + that` can panic
-    outright - which, since it happens while the engine's own Mutex is
-    held, poisons it, breaking every subsequent call on this same Context
-    too (not just this one). Runs in-process (not a subprocess): the
-    second part of this test - confirming the Context is still usable
-    afterward - specifically needs the *same* Context object to survive
-    the error, which a subprocess round trip can't observe from here.
+def test_process_events_negative_timeout_waits_indefinitely(tmp_path, polling_backend):
+    """process_events(timeout<0) means "wait indefinitely" - matching the
+    native convention each backend's own blocking primitive already uses
+    for exactly this (linux_aio's io_getevents() takes a NULL timespec;
+    linux_uring's new eventfd-based wait passes -1 to poll()) - rather than
+    being rejected outright, which was the previous behavior. Verified two
+    ways: it must still be genuinely blocked with nothing submitted yet
+    (not return early or misinterpret negative as "don't wait"), and it
+    must actually wake up and return once a real completion satisfies
+    min_requests, not stay stuck forever once given something to wait for.
     """
-    if backend.__name__ != "caio.linux_aio":
-        pytest.skip("linux_aio-only")
+    with open(str(tmp_path / "temp.bin"), "wb+") as f:
+        fd = f.fileno()
+        ctx = polling_backend.Context(max_requests=8)
 
-    ctx = backend.Context(max_requests=8)
-    with pytest.raises(ValueError):
-        ctx.process_events(timeout=-1)
+        result = {}
 
-    # Must not be poisoned/stuck - a completely ordinary call right after
-    # must still work normally.
-    assert ctx.process_events(timeout=0) == 0
+        def wait():
+            result["n"] = ctx.process_events(min_requests=1, timeout=-1)
+
+        t = threading.Thread(target=wait)
+        t.start()
+        try:
+            t.join(timeout=0.3)
+            assert t.is_alive(), (
+                "process_events(timeout=-1) returned before any operation "
+                "was even submitted - it must block, not treat a negative "
+                "timeout as \"don't wait\""
+            )
+
+            op = polling_backend.Operation.write(b"x" * 4, fd, 0)
+            ctx.submit(op)
+            if hasattr(ctx, "flush"):
+                ctx.flush()
+
+            t.join(timeout=5.0)
+            assert not t.is_alive(), (
+                "process_events(timeout=-1) never woke up for a real "
+                "completion - it must not block forever once satisfied"
+            )
+        finally:
+            t.join(timeout=5.0)
+
+        assert result.get("n", 0) >= 1
 
 
 def test_uring_process_events_max_requests_bounds_callbacks_not_just_return_value(tmp_path):
