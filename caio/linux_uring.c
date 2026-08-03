@@ -750,23 +750,27 @@ static int AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds) {
     self->cqes = (struct io_uring_cqe *)(cq + params.cq_off.cqes);
 
     /*
-     * Register eventfd for completion notification.
+     * Register eventfd for completion notification, unconditionally with
+     * plain IORING_REGISTER_EVENTFD (not the _ASYNC variant) in both
+     * SQPOLL and non-SQPOLL mode.
      *
-     * SQPOLL mode: use plain IORING_REGISTER_EVENTFD so the kernel signals
-     * the fd for ALL completions, including those the SQPOLL thread handles
-     * synchronously (e.g. tmpfs / page-cache reads).  EVENTFD_ASYNC would
-     * suppress those signals, leaving completions visible only via drain_cq
-     * and forcing a call_soon round-trip even when the data is hot.
-     *
-     * Non-SQPOLL mode: use IORING_REGISTER_EVENTFD_ASYNC.  Inline
-     * completions (caught by drain_cq inside flush()) must not re-trigger
-     * the eventfd path, as that would cause a redundant _on_read_event call
-     * for every op that finished during io_uring_enter.
+     * Non-SQPOLL mode used IORING_REGISTER_EVENTFD_ASYNC previously, to
+     * avoid a redundant _on_read_event wakeup for ops that already
+     * completed inline during io_uring_enter (caught by drain_cq() inside
+     * flush() before the eventfd path would even run). That relies on the
+     * kernel's own inline-vs-deferred classification for whether to signal
+     * the fd - confirmed (via a genuine disk-backed repro, not tmpfs) to
+     * fail to signal at all for at least one real deferred completion, an
+     * unresolvable hang: the read reaches the CQ ring but nothing ever
+     * wakes epoll_wait() to drain it. A spurious extra wakeup on an
+     * already-fully-drained ring is harmless (process_events() just finds
+     * nothing and returns immediately); a completion notification that
+     * silently never arrives is not. Same reasoning applies to SQPOLL,
+     * which already used the plain variant for a similar reason (the
+     * SQPOLL thread's own synchronous completions must not be suppressed
+     * either).
      */
-    uint32_t evfd_reg = self->sqpoll
-        ? IORING_REGISTER_EVENTFD
-        : IORING_REGISTER_EVENTFD_ASYNC;
-    if (io_uring_register(self->uring_fd, evfd_reg,
+    if (io_uring_register(self->uring_fd, IORING_REGISTER_EVENTFD,
                           &self->eventfd_fd, 1) < 0) {
         PyErr_SetFromErrno(PyExc_SystemError);
         return -1;
