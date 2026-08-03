@@ -80,6 +80,58 @@ jobs:
         with:
           files: dist/*.whl
 
+  wheels-musllinux-x86_64:
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/musllinux_1_2_x86_64
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set version from release tag
+        run: uv version --frozen "${GITHUB_REF_NAME#v}"
+      - name: Build wheel
+        run: |
+          /opt/python/${{ matrix.python }}/bin/pip install -U setuptools wheel
+          /opt/python/${{ matrix.python }}/bin/pip wheel . --no-build-isolation --no-deps -w /tmp/raw/
+          auditwheel repair /tmp/raw/caio-*.whl -w dist/ && rm /tmp/raw/caio-*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-musllinux-x86_64-${{ matrix.python }}
+          path: dist/*.whl
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+
+  wheels-musllinux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    container: quay.io/pypa/musllinux_1_2_aarch64
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set version from release tag
+        run: uv version --frozen "${GITHUB_REF_NAME#v}"
+      - name: Build wheel
+        run: |
+          /opt/python/${{ matrix.python }}/bin/pip install -U setuptools wheel
+          /opt/python/${{ matrix.python }}/bin/pip wheel . --no-build-isolation --no-deps -w /tmp/raw/
+          auditwheel repair /tmp/raw/caio-*.whl -w dist/ && rm /tmp/raw/caio-*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-musllinux-aarch64-${{ matrix.python }}
+          path: dist/*.whl
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+
   wheels-macos:
     runs-on: macos-latest
     permissions:
@@ -131,7 +183,7 @@ jobs:
           files: dist/*.whl
 
   pypi:
-    needs: [sdist, wheels-linux-x86_64, wheels-linux-aarch64, wheels-macos, wheels-windows]
+    needs: [sdist, wheels-linux-x86_64, wheels-linux-aarch64, wheels-musllinux-x86_64, wheels-musllinux-aarch64, wheels-macos, wheels-windows]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
