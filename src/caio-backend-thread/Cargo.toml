@@ -1,0 +1,13 @@
+[package]
+name = "caio-backend-thread"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "caio_backend_thread"
+path = "lib.rs"
+
+[dependencies]
+caio-core = { path = "../caio-core" }
+libc = "0.2"

@@ -8,24 +8,71 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - check: lint
+            os: ubuntu-latest
           - check: mypy
+            os: ubuntu-latest
+          - check: clippy
+            os: ubuntu-latest
+          - check: rust-tests
+            os: ubuntu-latest
+          - check: unsafe-baseline
+            os: ubuntu-latest
+          # linux_aio/linux_uring (and their caio-backend-linux-aio/
+          # caio-backend-uring driver crates) only compile on Linux at all -
+          # the root Cargo.toml unconditionally lists them as workspace
+          # members regardless, so `--workspace` only works on the
+          # ubuntu-latest entries above. Without these, a regression in
+          # caio-core/caio-backend-thread/thread_aio (all three genuinely
+          # cross-platform, including Windows-specific code in
+          # caio-backend-thread's platform_io.rs) could pass every Linux
+          # check yet be broken on Windows/macOS, with nothing catching it
+          # short of the full Python test suite happening to exercise it.
+          - check: clippy
+            os: windows-latest
+          - check: rust-tests
+            os: windows-latest
+          - check: clippy
+            os: macos-latest
+          - check: rust-tests
+            os: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: ${{ matrix.check == 'clippy' && 'clippy' || '' }}
       - uses: astral-sh/setup-uv@v5
+        if: matrix.check == 'lint' || matrix.check == 'mypy'
         with:
           python-version: "3.12"
       - run: uv sync
+        if: matrix.check == 'lint' || matrix.check == 'mypy'
       - name: Run lint
         if: matrix.check == 'lint'
         run: uv run --with ruff ruff check caio tests
       - name: Run mypy
         if: matrix.check == 'mypy'
         run: uv run --with mypy mypy --allow-untyped-calls --allow-untyped-defs --allow-untyped-decorators caio
+      - name: Run clippy (whole workspace)
+        if: matrix.check == 'clippy' && matrix.os == 'ubuntu-latest'
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run clippy (cross-platform crates only)
+        if: matrix.check == 'clippy' && matrix.os != 'ubuntu-latest'
+        run: cargo clippy -p caio-core -p caio-backend-thread -p caio-thread-aio --all-targets -- -D warnings
+      - name: Run Rust unit tests (whole workspace)
+        if: matrix.check == 'rust-tests' && matrix.os == 'ubuntu-latest'
+        run: cargo test --workspace
+      - name: Run Rust unit tests (cross-platform crates only)
+        if: matrix.check == 'rust-tests' && matrix.os != 'ubuntu-latest'
+        run: cargo test -p caio-core -p caio-backend-thread -p caio-thread-aio
+      - name: Check unsafe baseline
+        if: matrix.check == 'unsafe-baseline'
+        run: python3 scripts/check-unsafe-baseline.py
 
   tests:
     needs: lint
@@ -64,6 +111,7 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "${{ matrix.python }}"

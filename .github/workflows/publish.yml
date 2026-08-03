@@ -28,26 +28,39 @@ jobs:
         with:
           files: dist/*.tar.gz
 
+  # All three backends build against PyO3's abi3-py310 (stable ABI, floor
+  # 3.10), so one build per platform covers every supported CPython version
+  # (3.10-3.14) - no per-version matrix needed. cp310-cp310 is just the
+  # building interpreter (must be >=3.10 to have the abi3 headers); the
+  # resulting wheel is tagged cp310-abi3 and installs on any newer version.
   wheels-linux-x86_64:
     runs-on: ubuntu-latest
     container: quay.io/pypa/manylinux_2_34_x86_64
     permissions:
       contents: write
-    strategy:
-      matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314]
     steps:
       - uses: actions/checkout@v4
       - name: Set version from release tag
         run: uv version --frozen "${GITHUB_REF_NAME#v}"
       - name: Build wheel
         run: |
-          /opt/python/${{ matrix.python }}/bin/pip install -U setuptools wheel
-          /opt/python/${{ matrix.python }}/bin/pip wheel . --no-build-isolation --no-deps -w /tmp/raw/
+          # manylinux containers don't ship Rust; thread_aio needs it (maturin/PyO3),
+          # and scripts/build_backend.py (the PEP 517 backend - see
+          # pyproject.toml) also builds the linux_aio/linux_uring sibling
+          # crates itself via plain `cargo build`, after maturin's own
+          # thread_aio build completes, merging their .abi3.so into the wheel.
+          # --no-build-isolation still resolves build-backend/backend-path from
+          # pyproject.toml as normal - it only skips auto-installing
+          # [build-system] requires, which is why maturin is still pip
+          # installed manually below.
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          source "$HOME/.cargo/env"
+          /opt/python/cp310-cp310/bin/pip install -U maturin
+          /opt/python/cp310-cp310/bin/pip wheel . --no-build-isolation --no-deps -w /tmp/raw/
           auditwheel repair /tmp/raw/caio-*.whl -w dist/ && rm /tmp/raw/caio-*.whl
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-linux-x86_64-${{ matrix.python }}
+          name: wheel-linux-x86_64
           path: dist/*.whl
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -59,21 +72,88 @@ jobs:
     container: quay.io/pypa/manylinux_2_34_aarch64
     permissions:
       contents: write
-    strategy:
-      matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314]
     steps:
       - uses: actions/checkout@v4
       - name: Set version from release tag
         run: uv version --frozen "${GITHUB_REF_NAME#v}"
       - name: Build wheel
         run: |
-          /opt/python/${{ matrix.python }}/bin/pip install -U setuptools wheel
-          /opt/python/${{ matrix.python }}/bin/pip wheel . --no-build-isolation --no-deps -w /tmp/raw/
+          # manylinux containers don't ship Rust; thread_aio needs it (maturin/PyO3),
+          # and scripts/build_backend.py (the PEP 517 backend - see
+          # pyproject.toml) also builds the linux_aio/linux_uring sibling
+          # crates itself via plain `cargo build`, after maturin's own
+          # thread_aio build completes, merging their .abi3.so into the wheel.
+          # --no-build-isolation still resolves build-backend/backend-path from
+          # pyproject.toml as normal - it only skips auto-installing
+          # [build-system] requires, which is why maturin is still pip
+          # installed manually below.
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          source "$HOME/.cargo/env"
+          /opt/python/cp310-cp310/bin/pip install -U maturin
+          /opt/python/cp310-cp310/bin/pip wheel . --no-build-isolation --no-deps -w /tmp/raw/
           auditwheel repair /tmp/raw/caio-*.whl -w dist/ && rm /tmp/raw/caio-*.whl
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-linux-aarch64-${{ matrix.python }}
+          name: wheel-linux-aarch64
+          path: dist/*.whl
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+
+  # musllinux (Alpine/musl libc): the *-unknown-linux-musl Rust targets
+  # default to crt-static (fully static linking), which can't produce a
+  # cdylib - RUSTFLAGS disables it. Also, pip's maturin package shells out to
+  # the standalone `maturin` binary by bare name, so PATH needs the
+  # interpreter's bin dir (not just invoking pip/python via absolute path).
+  wheels-musllinux-x86_64:
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/musllinux_1_2_x86_64
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set version from release tag
+        run: uv version --frozen "${GITHUB_REF_NAME#v}"
+      - name: Build wheel
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          source "$HOME/.cargo/env"
+          export RUSTFLAGS="-C target-feature=-crt-static"
+          export PATH="/opt/python/cp310-cp310/bin:$PATH"
+          pip install -U maturin
+          pip wheel . --no-build-isolation --no-deps -w /tmp/raw/
+          auditwheel repair /tmp/raw/caio-*.whl -w dist/ && rm /tmp/raw/caio-*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-musllinux-x86_64
+          path: dist/*.whl
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+
+  wheels-musllinux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    container: quay.io/pypa/musllinux_1_2_aarch64
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set version from release tag
+        run: uv version --frozen "${GITHUB_REF_NAME#v}"
+      - name: Build wheel
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          source "$HOME/.cargo/env"
+          export RUSTFLAGS="-C target-feature=-crt-static"
+          export PATH="/opt/python/cp310-cp310/bin:$PATH"
+          pip install -U maturin
+          pip wheel . --no-build-isolation --no-deps -w /tmp/raw/
+          auditwheel repair /tmp/raw/caio-*.whl -w dist/ && rm /tmp/raw/caio-*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-musllinux-aarch64
           path: dist/*.whl
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -84,22 +164,20 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
-    strategy:
-      matrix:
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v5
       - name: Set version from release tag
         run: uv version --frozen "${GITHUB_REF_NAME#v}"
       - uses: actions/setup-python@v5
         with:
-          python-version: "${{ matrix.python }}"
+          python-version: "3.10"
       - run: pip install build
       - run: python -m build --wheel
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-macos-${{ matrix.python }}
+          name: wheel-macos
           path: dist/*.whl
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -112,13 +190,14 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v5
       - name: Set version from release tag
         run: uv version --frozen "${GITHUB_REF_NAME#v}"
         shell: bash
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.10"
       - run: pip install build
       - run: python -m build --wheel
       - uses: actions/upload-artifact@v4
@@ -131,7 +210,7 @@ jobs:
           files: dist/*.whl
 
   pypi:
-    needs: [sdist, wheels-linux-x86_64, wheels-linux-aarch64, wheels-macos, wheels-windows]
+    needs: [sdist, wheels-linux-x86_64, wheels-linux-aarch64, wheels-musllinux-x86_64, wheels-musllinux-aarch64, wheels-macos, wheels-windows]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

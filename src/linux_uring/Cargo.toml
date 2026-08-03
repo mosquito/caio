@@ -1,0 +1,25 @@
+[package]
+name = "caio-linux-uring"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "linux_uring"
+path = "lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "stub_gen"
+path = "bin/stub_gen.rs"
+
+[dependencies]
+# No "extension-module" feature - see thread_aio/Cargo.toml's own comment
+# on this; the stub_gen bin below needs to actually embed Python, not
+# defer symbol resolution to a host process the way a dlopen'd extension
+# module does.
+pyo3 = { version = "0.29", features = ["abi3-py310"] }
+libc = "0.2"
+caio-core = { path = "../caio-core" }
+caio-backend-uring = { path = "../caio-backend-uring" }
+pyo3-stub-gen = "0.23"

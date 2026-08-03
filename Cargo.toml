@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+  "src/caio-core",
+  "src/caio-backend-thread",
+  "src/caio-backend-linux-aio",
+  "src/caio-backend-uring",
+  "src/thread_aio",
+  "src/linux_aio",
+  "src/linux_uring",
+]
+
+[profile.release]
+opt-level = 3

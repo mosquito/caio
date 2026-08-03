@@ -1,0 +1,29 @@
+[package]
+name = "caio-thread-aio"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "thread_aio"
+path = "lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "stub_gen"
+path = "bin/stub_gen.rs"
+
+[dependencies]
+# No "extension-module" feature: that's the old, deprecated way to build a
+# PyO3 cdylib, and it disables libpython linking for *every* target this
+# crate builds, including the stub_gen bin below (which needs to actually
+# embed Python to run, not defer symbol resolution to a host process the
+# way a dlopen'd extension module does) - maturin >= 1.9.4 (see the
+# `requires` floor in the repo's own pyproject.toml) sets the
+# PYO3_BUILD_EXTENSION_MODULE env var automatically instead, which only
+# disables libpython linking for the actual wheel build, not for cargo
+# invocations like `cargo run --bin stub_gen`.
+pyo3 = { version = "0.29", features = ["abi3-py310"] }
+caio-core = { path = "../caio-core" }
+caio-backend-thread = { path = "../caio-backend-thread" }
+pyo3-stub-gen = "0.23"
