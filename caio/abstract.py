@@ -56,7 +56,7 @@ class AbstractOperation(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def get_value(self) -> bytes | int:
+    def get_value(self) -> bytes | int | None:
         """
         Method returns a bytes value of AIOOperation's result or None.
         """

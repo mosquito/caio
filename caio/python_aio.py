@@ -1,3 +1,4 @@
+import operator
 import os
 import sys
 import threading
@@ -272,16 +273,39 @@ class Operation(AbstractOperation):
         payload: bytes | None = None,
         priority: int | None = None,
     ):
+        # Validated eagerly, at construction time - matching the other 3
+        # backends, which reject a non-int-like fd/nbytes/offset/priority
+        # (or a non-bytes write payload) synchronously via
+        # PyArg_ParseTupleAndKeywords/PyBytes_Check, rather than storing it
+        # and failing later inside a worker thread. operator.index() is the
+        # same __index__-based coercion PyArg_ParseTupleAndKeywords' "I"/"K"
+        # format codes use internally, so this accepts exactly what the C
+        # constructors accept (plain ints, numpy-style int-likes, ...) and
+        # rejects exactly what they reject (str, float, ...).
+        fd = operator.index(fd)
+        if nbytes is not None:
+            nbytes = operator.index(nbytes)
+        if offset is not None:
+            offset = operator.index(offset)
+        if priority is not None:
+            priority = operator.index(priority)
+
+        # Plain bytes, not a BytesIO wrapper - for a write this is the
+        # caller's own payload, handed to pwrite() as-is; for a read it
+        # starts empty and _handle_read() replaces it with pread()'s
+        # result directly. Either way there's nothing to unwrap later, so
+        # get_value()/payload return it with no extra copy - and it's
+        # never None, so callers don't need to check.
+        if opcode == OpCode.WRITE:
+            if not isinstance(payload, bytes):
+                raise ValueError(f"payload_bytes must be bytes, got {payload!r}")
+            buffer = payload
+        else:
+            buffer = b""
+
         self.callback: Callable[[int], Any] | None = None
         self.in_progress = False
-        # Plain bytes, not a BytesIO wrapper - for a write this is the
-        # caller's own payload, handed to pwrite() as-is (falling back to
-        # b"" for a falsy/omitted payload, e.g. an explicit zero-byte
-        # write); for a read it starts empty and _handle_read() replaces
-        # it with pread()'s result directly. Either way there's nothing to
-        # unwrap later, so get_value()/payload return it with no extra
-        # copy - and it's never None, so callers don't need to check.
-        self.buffer: bytes = payload or b"" if opcode == OpCode.WRITE else b""
+        self.buffer: bytes = buffer
 
         self.opcode = opcode
         self.__fileno = fd
@@ -333,7 +357,7 @@ class Operation(AbstractOperation):
         """
         return cls(fd, None, None, opcode=OpCode.FDSYNC, priority=priority)
 
-    def get_value(self) -> bytes | int:
+    def get_value(self) -> bytes | int | None:
         """
         Method returns a bytes value of AIOOperation's result or None.
         """
@@ -342,6 +366,9 @@ class Operation(AbstractOperation):
 
         if self.opcode == OpCode.WRITE:
             return self.written
+
+        if self.opcode in (OpCode.FSYNC, OpCode.FDSYNC):
+            return None
 
         return self.buffer
 
