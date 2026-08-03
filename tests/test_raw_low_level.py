@@ -520,27 +520,24 @@ def test_linux_aio_abandoned_operation_is_collectible_by_gc(tmp_path):
 
 
 def test_resubmission_behavior_is_backend_specific(tmp_path, backend):
-    """Backends genuinely disagree on what happens if you submit() the
-    same Operation object twice back to back, with no drain in between:
+    """All four backends now agree that submit()-ing the same Operation
+    object twice back to back, with no drain in between, must silently
+    skip the second attempt - none of them will ever hand out two
+    concurrent dispatches of the same one-shot Operation:
 
     - thread_aio marks "in_progress" sticky forever (never reset), so a
       second submit() always silently skips it, regardless of timing.
-    - linux_uring resets "in_progress" only once the operation actually
-      completes; since this test never calls flush() (the only thing that
-      hands submitted SQEs to the kernel for the default, non-SQPOLL
-      mode), the operation cannot possibly have completed yet, so the
-      second submit() is deterministically skipped here too.
-    - linux_aio has the same in-flight guard as linux_uring/thread_aio: a
-      second submit() while still in flight is skipped, not dispatched -
-      otherwise the kernel would end up with two concurrent iocbs pointing
-      at the same buffer, a real data race for reads.
-    - python_aio tracks no such state at all (out of scope for this
-      backend, which stays pure Python) - a second submit() just
-      resubmits it, dispatching the same operation twice.
+    - linux_uring/linux_aio reset "in_progress" only once the operation
+      actually completes; since this test never calls flush() (the only
+      thing that hands submitted SQEs to the kernel for linux_uring's
+      default, non-SQPOLL mode), the operation cannot possibly have
+      completed yet, so the second submit() is deterministically skipped
+      here too - otherwise the kernel would end up with two concurrent
+      iocbs/SQEs pointing at the same buffer, a real data race for reads.
+    - python_aio now has the same in-flight guard as the other three
+      (Operation.in_progress, checked/set under Context's own lock).
 
-    This test exists to make that difference explicit and catch any
-    accidental regression in either direction, not to force one "correct"
-    answer."""
+    This test exists to catch any regression in this shared guarantee."""
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
         ctx = backend.Context(max_requests=4)
@@ -550,11 +547,7 @@ def test_resubmission_behavior_is_backend_specific(tmp_path, backend):
         assert first == 1
 
         second = ctx.submit(op)
-
-        if backend.__name__ == "caio.python_aio":
-            assert second == 1, "expected this backend to allow resubmission"
-        else:
-            assert second == 0, "expected sticky/not-yet-completed in-flight state to skip resubmission"
+        assert second == 0, "expected sticky/not-yet-completed in-flight state to skip resubmission"
 
         if hasattr(ctx, "process_events"):
             try:
@@ -585,21 +578,14 @@ def test_linux_aio_rejects_concurrent_resubmit(tmp_path):
 
 
 def test_submit_same_operation_object_twice_in_one_batch_is_accepted_once(tmp_path, backend):
-    """thread_aio, linux_aio, linux_uring: submitting the same one-shot
-    Operation object twice within a single submit() call must only ever
-    be accepted once - not twice with two different RequestIds silently
-    overwriting each other in the Operation's own single request_id field.
-    A prior bug accepted both occurrences (each one's own already_submitted()
-    check ran before either was marked submitted), causing the underlying
-    I/O to actually happen twice with only one completion ever delivered.
-
-    python_aio has no one-shot contract at all (resubmit is intentionally
-    allowed there today - a separate, already-tracked gap), so it's
-    excluded here rather than asserted against.
+    """All four backends: submitting the same in-flight Operation object
+    twice within a single submit() call must only ever be accepted once -
+    not twice with two different RequestIds/dispatches silently
+    overwriting each other. A prior bug (thread_aio/linux_aio/linux_uring)
+    accepted both occurrences (each one's own already-in-progress check
+    ran before either was actually marked), causing the underlying I/O to
+    happen twice with only one completion ever delivered.
     """
-    if backend.__name__ == "caio.python_aio":
-        pytest.skip("python_aio has no one-shot contract - resubmit is intentionally allowed there")
-
     path = tmp_path / "data.bin"
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, 0o600)
     try:

@@ -93,29 +93,40 @@ class Context(AbstractContext):
                 ),
             )
 
-    def _release_slot(self):
+    def _release_slot(self, operation: "Operation"):
         with self._lock:
             self._in_progress -= 1
+            operation.in_progress = False
 
-    def _execute(self, operation: "Operation"):
+    def _execute(self, operation: "Operation") -> bool:
+        """
+        Returns True if actually scheduled, False if skipped because
+        ``operation`` was already in progress - matches the other three
+        backends, which all silently skip (rather than raise on, or
+        dispatch twice) a resubmit of an Operation still in flight.
+        """
         handler = self._OP_MAP[operation.opcode]
 
         def on_error(exc):
-            self._release_slot()
+            self._release_slot(operation)
             operation.exception = exc
             operation.written = 0
             self._invoke_callback(operation, None)
 
         def on_success(result):
-            self._release_slot()
+            self._release_slot(operation)
             operation.written = result
             self._invoke_callback(operation, result)
 
-        # Check state, capacity, and the reservation itself under one lock -
-        # otherwise two concurrent submits can both pass the capacity check
-        # before either increments, or a close() can slip in between the
-        # check and the increment.
+        # operation.in_progress is checked and set under the same lock as
+        # the capacity check/reservation - otherwise two concurrent
+        # submits of the very same Operation (or the same object appearing
+        # twice in one submit(op, op) call) could both see it unset and
+        # both dispatch, running the I/O twice against one result object.
         with self._lock:
+            if operation.in_progress:
+                return False
+
             if self._state != ContextState.OPEN:
                 raise RuntimeError("Context is closed")
 
@@ -125,6 +136,7 @@ class Context(AbstractContext):
                 )
 
             self._in_progress += 1
+            operation.in_progress = True
 
         try:
             self.pool.apply_async(
@@ -137,8 +149,10 @@ class Context(AbstractContext):
             # tore down the pool) - the slot reserved above was never
             # actually claimed by a real job, so it must be given back
             # instead of permanently inflating _in_progress.
-            self._release_slot()
+            self._release_slot(operation)
             raise
+
+        return True
 
     if NATIVE_PREAD_PWRITE:
         def __pread(self, fd, size, offset):
@@ -183,18 +197,14 @@ class Context(AbstractContext):
         return
 
     def submit(self, *aio_operations) -> int:
-        operations = []
-
         for operation in aio_operations:
             if not isinstance(operation, Operation):
                 raise ValueError("Invalid Operation %r", operation)
 
-            operations.append(operation)
-
         count = 0
-        for operation in operations:
-            self._execute(operation)
-            count += 1
+        for operation in aio_operations:
+            if self._execute(operation):
+                count += 1
 
         return count
 
@@ -245,6 +255,7 @@ class Operation(AbstractOperation):
         priority: Optional[int] = None,
     ):
         self.callback = None    # type: Optional[Callable[[int], Any]]
+        self.in_progress = False
         self.buffer = BytesIO()
 
         if opcode == OpCode.WRITE and payload:
