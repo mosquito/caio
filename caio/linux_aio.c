@@ -376,11 +376,12 @@ static PyObject* AIOContext_cancel(AIOContext *self, PyObject *args, PyObject *k
 
     /* io_cancel() succeeding delivers this event synchronously, right
      * here - it will never also show up via process_events()'s own
-     * io_getevents() loop, so this op's submit()-time claim must be
-     * released here, the only place that ever will for a successfully
-     * cancelled operation. Committed before invoking the callback so a
-     * raising callback doesn't leave the op stuck in_progress forever. */
-    op->in_progress = 0;
+     * io_getevents() loop, so this op's submit()-time context reference
+     * must be released here, the only place that ever will for a
+     * successfully cancelled operation. in_progress itself is
+     * deliberately NOT reset - one-shot forever, matching thread_aio and
+     * the (paused) Rust rewrite; a cancelled Operation is still terminal,
+     * not retryable, only a fresh one constructed for a retry. */
     Py_CLEAR(op->context);
 
     if (op->callback != NULL) {
@@ -491,22 +492,24 @@ static PyObject* AIOContext_process_events(
 
     /* Every completion here was already dequeued from the kernel by
      * io_getevents() above - it will never be seen again by a later call,
-     * so each one's submit()-time claim (in_progress, context, the op
-     * reference itself) must be released exactly once right here,
-     * regardless of whether a callback is set, and regardless of whether
-     * that callback raises. The original version skipped the release
-     * entirely when callback was NULL (a plain leak) and aborted the
-     * whole loop on the first raising callback, silently dropping every
-     * completion after it (already consumed from the kernel, but never
-     * delivered) - fixed by isolating each callback's own exception
-     * instead of letting it escape. */
+     * so each one's submit()-time claim (context, the op reference itself)
+     * must be released exactly once right here, regardless of whether a
+     * callback is set, and regardless of whether that callback raises.
+     * The original version skipped the release entirely when callback was
+     * NULL (a plain leak) and aborted the whole loop on the first raising
+     * callback, silently dropping every completion after it (already
+     * consumed from the kernel, but never delivered) - fixed by isolating
+     * each callback's own exception instead of letting it escape.
+     * in_progress itself is deliberately NOT reset here - one-shot
+     * forever once genuinely submitted, matching thread_aio and the
+     * (paused) Rust rewrite: a completed Operation must not be
+     * resubmittable, only a fresh one constructed for a retry. */
     int32_t i;
     for (i = 0; i < result; i++) {
         ev = &events[i];
 
         op = (AIOOperation*)(uintptr_t) ev->data;
 
-        op->in_progress = 0;
         Py_CLEAR(op->context);
 
         if (ev->res >= 0) {

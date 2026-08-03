@@ -739,8 +739,11 @@ static int uring_drain_cq(AIOContext *self, uint32_t max) {
         if (cqe->user_data == CANCEL_USER_DATA)
             continue;
 
+        /* in_progress deliberately NOT reset here - one-shot forever once
+         * genuinely submitted, matching thread_aio/linux_aio and the
+         * (paused) Rust rewrite: a completed Operation must not be
+         * resubmittable, only a fresh one constructed for a retry. */
         AIOOperation *op = (AIOOperation *)(uintptr_t) cqe->user_data;
-        op->in_progress = 0;
         op->result = cqe->res;
         if (cqe->res < 0) {
             op->error = -cqe->res;

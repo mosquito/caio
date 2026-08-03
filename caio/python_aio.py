@@ -93,7 +93,18 @@ class Context(AbstractContext):
                 ),
             )
 
-    def _release_slot(self, operation: "Operation"):
+    def _release_slot(self):
+        with self._lock:
+            self._in_progress -= 1
+
+    def _rollback_claim(self, operation: "Operation"):
+        """
+        Undoes a claim that was never actually scheduled (e.g. a
+        concurrent close() tore down the pool between the capacity
+        reservation and apply_async()) - unlike genuine completion, this
+        must reset operation.in_progress, since the operation never
+        actually ran and must stay retryable.
+        """
         with self._lock:
             self._in_progress -= 1
             operation.in_progress = False
@@ -107,14 +118,18 @@ class Context(AbstractContext):
         """
         handler = self._OP_MAP[operation.opcode]
 
+        # operation.in_progress is deliberately NOT reset on genuine
+        # completion below - one-shot forever once actually scheduled,
+        # matching all three native backends: a completed Operation must
+        # not be resubmittable, only a fresh one constructed for a retry.
         def on_error(exc):
-            self._release_slot(operation)
+            self._release_slot()
             operation.exception = exc
             operation.written = 0
             self._invoke_callback(operation, None)
 
         def on_success(result):
-            self._release_slot(operation)
+            self._release_slot()
             operation.written = result
             self._invoke_callback(operation, result)
 
@@ -149,7 +164,7 @@ class Context(AbstractContext):
             # tore down the pool) - the slot reserved above was never
             # actually claimed by a real job, so it must be given back
             # instead of permanently inflating _in_progress.
-            self._release_slot(operation)
+            self._rollback_claim(operation)
             raise
 
         return True
