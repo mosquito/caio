@@ -2,14 +2,14 @@ import os
 import sys
 import threading
 from collections import defaultdict
+from collections.abc import Callable
 from enum import IntEnum, unique
 from multiprocessing.pool import ThreadPool
 from threading import Lock, RLock
 from types import MappingProxyType
-from typing import Any, Callable
+from typing import Any
 
 from .abstract import AbstractContext, AbstractOperation
-
 
 fdsync = getattr(os, "fdatasync", os.fsync)
 NATIVE_PREAD_PWRITE = hasattr(os, "pread") and hasattr(os, "pwrite")
@@ -217,7 +217,7 @@ class Context(AbstractContext):
     def submit(self, *aio_operations) -> int:
         for operation in aio_operations:
             if not isinstance(operation, Operation):
-                raise ValueError("Invalid Operation %r", operation)
+                raise ValueError(f"Invalid Operation {operation!r}")  # noqa: TRY004 (pre-existing public exception type, not changing it here)
 
         count = 0
         for operation in aio_operations:
@@ -363,6 +363,6 @@ class Operation(AbstractOperation):
 
     def set_callback(self, callback: Callable[[int], Any]) -> bool:
         if not callable(callback):
-            raise ValueError(f"callback must be callable, got {callback!r}")
+            raise ValueError(f"callback must be callable, got {callback!r}")  # noqa: TRY004 (pre-existing public exception type, not changing it here)
         self.callback = callback
         return True

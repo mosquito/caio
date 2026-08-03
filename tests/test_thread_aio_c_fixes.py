@@ -2,11 +2,10 @@ import gc
 import sys
 import tempfile
 import time
-import weakref
 
 import pytest
 
-import caio.thread_aio as thread_aio
+from caio import thread_aio
 
 
 def drain(deadline_s=5.0, poll=lambda: None):
@@ -34,12 +33,12 @@ def test_get_value_on_fsync_does_not_corrupt_none_refcount():
 
         assert drain(5.0, lambda: len(results) >= 200)
 
-        for op in [thread_aio.Operation.fsync(f.fileno())]:
-            done = []
-            op.set_callback(done.append)
-            ctx.submit(op)
-            assert drain(5.0, lambda: bool(done))
-            assert op.get_value() is None
+        op = thread_aio.Operation.fsync(f.fileno())
+        done = []
+        op.set_callback(done.append)
+        ctx.submit(op)
+        assert drain(5.0, lambda: bool(done))
+        assert op.get_value() is None
 
 
 def test_resubmitting_an_in_flight_operation_does_not_corrupt_context():
@@ -125,7 +124,7 @@ def test_bad_args_do_not_leak_the_partially_constructed_operation():
         ]:
             refs = []
 
-            def make():
+            def make(ctor=ctor, args=args):
                 try:
                     ctor(*args)
                 except TypeError:

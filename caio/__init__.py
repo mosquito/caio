@@ -75,9 +75,8 @@ def __select_implementation():
 
     elif requested and requested not in implementations:
         warnings.warn(
-            "CAIO_IMPL contains unsupported value %r. Use one of %r" % (
-                requested, tuple(implementations),
-            ),
+            f"CAIO_IMPL contains unsupported value {requested!r}. "
+            f"Use one of {tuple(implementations)!r}",
             RuntimeWarning,
         )
         return
@@ -97,21 +96,21 @@ AsyncioContext = preferred_asyncio.AsyncioContext   # type: ignore
 
 
 __all__ = (
-    "Context",
-    "Operation",
-    "AsyncioContext",
     "AbstractContext",
     "AbstractOperation",
-    "python_aio",
-    "python_aio_asyncio",
-    "linux_uring",
-    "linux_uring_asyncio",
+    "AsyncioContext",
+    "Context",
+    "Operation",
+    "__author__",
+    "__version__",
     "linux_aio",
     "linux_aio_asyncio",
+    "linux_uring",
+    "linux_uring_asyncio",
+    "python_aio",
+    "python_aio_asyncio",
     "thread_aio",
     "thread_aio_asyncio",
-    "__version__",
-    "__author__",
     "variants",
     "variants_asyncio",
 )

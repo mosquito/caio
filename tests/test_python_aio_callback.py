@@ -104,7 +104,7 @@ def test_scheduling_failure_rolls_back_the_reserved_slot():
     ctx = python_aio.Context(max_requests=1)
     ctx.pool.close()  # underlying pool gone, but ctx._state is still OPEN
 
-    with pytest.raises(Exception):  # noqa: B017,PT011 (whatever ThreadPool itself raises)
+    with pytest.raises(Exception):  # noqa: B017 (whatever ThreadPool itself raises)
         ctx.submit(python_aio.Operation.fsync(0))
 
     assert ctx._in_progress == 0
