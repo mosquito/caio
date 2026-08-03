@@ -654,6 +654,39 @@ def test_linux_aio_abandoned_operation_is_collectible_by_gc(tmp_path):
         assert op_ref() is None, "gc.collect() must break the Context<->Operation cycle"
 
 
+def test_operation_self_referential_callback_cycle_is_collectible_by_gc(backend):
+    """A callback closure that captures its own Operation (a natural pattern -
+    e.g. `op.set_callback(lambda res: op.get_value())` to stash the result
+    somewhere) forms a genuine reference cycle: op -> callback -> cell -> op.
+    Plain refcounting can never free this on its own - cyclic GC must find and
+    break it, via each C backend's Operation now supporting the GC protocol
+    (Py_TPFLAGS_HAVE_GC / tp_traverse / tp_clear), same as python_aio's plain
+    Python class already did without any extra work.
+
+    Unlike test_linux_aio_abandoned_operation_is_collectible_by_gc above,
+    this doesn't need a Context at all - the cycle is entirely within the
+    Operation object itself, so it's a scenario all four backends can hit,
+    not just the two native ones with a `.context` back-reference.
+    """
+    def make_cycle():
+        op = backend.Operation.fsync(1)
+        op.set_callback(lambda res: op)
+        return weakref.ref(op)
+
+    gc.disable()
+    try:
+        op_ref = make_cycle()
+        assert op_ref() is not None, (
+            "expected plain refcounting alone to NOT free this cycle - "
+            "if it did, this test isn't exercising the scenario it claims to"
+        )
+    finally:
+        gc.enable()
+
+    gc.collect()
+    assert op_ref() is None, "gc.collect() must break the self-referential callback cycle"
+
+
 def test_resubmission_behavior_is_backend_specific(tmp_path, backend):
     """All four backends now agree that submit()-ing the same Operation
     object twice back to back, with no drain in between, must silently

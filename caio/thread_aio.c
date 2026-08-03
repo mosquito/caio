@@ -441,19 +441,50 @@ AIOContextType = {
 };
 
 
-static void
-AIOOperation_dealloc(AIOOperation *self) {
-    if (self->weakreflist != NULL)
-        PyObject_ClearWeakRefs((PyObject *) self);
+static int
+AIOOperation_traverse(AIOOperation *self, visitproc visit, void *arg) {
+    Py_VISIT(self->callback);
+    Py_VISIT(self->py_buffer);
+    Py_VISIT(self->ctx);
+    return 0;
+}
 
+
+static int
+AIOOperation_clear(AIOOperation *self) {
     Py_CLEAR(self->callback);
 
+    /* self->buf is a separate PyMem_Calloc allocation py_buffer's own
+     * memoryview only views, not owns - clearing py_buffer alone would
+     * leak it (and, if this runs before this Operation's own eventual
+     * dealloc, that dealloc's identical free-then-NULL below prevents a
+     * double free only because this already set it to NULL). */
     if ((self->opcode == THAIO_READ) && self->buf != NULL) {
         PyMem_Free(self->buf);
         self->buf = NULL;
     }
 
     Py_CLEAR(self->py_buffer);
+
+    /* Normally already NULL by any point tp_clear/dealloc could run -
+     * worker() clears it before ever touching the GIL again - but that's
+     * only true once genuinely dispatched; cleared here too in case a
+     * cyclic collection runs during the narrow submit()-to-dispatch
+     * window where it's still set. */
+    Py_CLEAR(self->ctx);
+
+    return 0;
+}
+
+
+static void
+AIOOperation_dealloc(AIOOperation *self) {
+    PyObject_GC_UnTrack(self);
+
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
+    AIOOperation_clear(self);
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
@@ -778,6 +809,15 @@ static PyObject* AIOOperation_get_value(
 
     switch (self->opcode) {
         case THAIO_READ:
+            /* self->buf can only be NULL here if tp_clear() already ran -
+             * only possible once this Operation is otherwise unreachable
+             * (see AIOOperation_traverse/_clear), so nothing could
+             * actually be waiting on this return value, but degrade to
+             * None rather than hand out an uninitialized buffer either
+             * way (PyBytes_FromStringAndSize(NULL, n>0) doesn't crash,
+             * it silently returns garbage). */
+            if (self->buf == NULL)
+                Py_RETURN_NONE;
             return PyBytes_FromStringAndSize(
                 self->buf, self->buf_size
             );
@@ -941,8 +981,10 @@ AIOOperationType = {
     .tp_doc = "thread aio operation representation",
     .tp_basicsize = sizeof(AIOOperation),
     .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_dealloc = (destructor) AIOOperation_dealloc,
+    .tp_traverse = (traverseproc) AIOOperation_traverse,
+    .tp_clear = (inquiry) AIOOperation_clear,
     .tp_members = AIOOperation_members,
     .tp_getset = AIOOperation_getset,
     .tp_methods = AIOOperation_methods,

@@ -100,16 +100,31 @@ typedef struct {
 } AIOOperation;
 
 
-static void AIOOperation_dealloc(AIOOperation *self) {
-    if (self->weakreflist != NULL)
-        PyObject_ClearWeakRefs((PyObject *) self);
+static int AIOOperation_traverse(AIOOperation *self, visitproc visit, void *arg) {
+    Py_VISIT(self->py_buffer);
+    Py_VISIT(self->callback);
+    Py_VISIT(self->context);
+    return 0;
+}
 
+
+static int AIOOperation_clear(AIOOperation *self) {
     Py_CLEAR(self->callback);
     Py_CLEAR(self->context);
-
     /* buf points into py_buffer's internal storage for reads — do NOT free
      * it separately; Py_CLEAR(py_buffer) handles the memory. */
     Py_CLEAR(self->py_buffer);
+    return 0;
+}
+
+
+static void AIOOperation_dealloc(AIOOperation *self) {
+    PyObject_GC_UnTrack(self);
+
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+
+    AIOOperation_clear(self);
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
@@ -341,6 +356,14 @@ static PyObject *AIOOperation_get_value(
 
     switch (self->opcode) {
         case URING_READ:
+            /* py_buffer can only be NULL here if tp_clear() already ran -
+             * only possible once this Operation is otherwise unreachable
+             * (see AIOOperation_traverse/_clear), so nothing could actually
+             * be waiting on this return value, but degrade to None rather
+             * than crash on the now-dangling self->buf either way. */
+            if (self->py_buffer == NULL)
+                Py_RETURN_NONE;
+
             /* Fast path: kernel filled the whole buffer — return py_buffer
              * directly with no copy.  Partial reads (e.g. EOF) fall back to
              * a slice. */
@@ -480,8 +503,10 @@ static PyTypeObject AIOOperationType = {
     .tp_doc       = "io_uring AIO operation",
     .tp_basicsize = sizeof(AIOOperation),
     .tp_itemsize  = 0,
-    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_dealloc   = (destructor) AIOOperation_dealloc,
+    .tp_traverse  = (traverseproc) AIOOperation_traverse,
+    .tp_clear     = (inquiry) AIOOperation_clear,
     .tp_repr      = (reprfunc)   AIOOperation_repr,
     .tp_members   = AIOOperation_members,
     .tp_getset    = AIOOperation_getset,
