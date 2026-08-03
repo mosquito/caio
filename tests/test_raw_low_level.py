@@ -437,6 +437,91 @@ def test_linux_aio_operation_context_back_reference_clears_on_completion(tmp_pat
         assert op.context is None
 
 
+def test_uring_operation_context_back_reference_clears_on_completion(tmp_path):
+    """linux_uring only: same contract as linux_aio's `.context` property
+    (see test_linux_aio_operation_context_back_reference_clears_on_completion
+    above) - submit() makes each accepted Operation hold a strong
+    reference to its own Context while genuinely in flight, cleared once
+    the operation reaches a terminal state (drained via
+    process_events()/flush()). Without this, a Context the caller drops
+    while an operation is still outstanding could be garbage collected
+    mid-flight, munmapping the SQ/CQ rings and closing uring_fd while the
+    kernel might still be touching them.
+    """
+    linux_uring = pytest.importorskip("caio.linux_uring")
+
+    with open(str(tmp_path / "temp.bin"), "wb+") as f:
+        fd = f.fileno()
+        ctx = linux_uring.Context(max_requests=8)
+        op = linux_uring.Operation.write(b"x" * 4, fd, 0)
+
+        assert ctx.submit(op) == 1
+        assert op.context is ctx
+
+        del ctx
+
+        still_alive = op.context
+        assert still_alive.max_requests == 8
+
+        drain(still_alive, 1)
+        assert op.get_value() == 4
+
+        assert op.context is None
+
+
+def test_uring_context_stays_alive_via_operation_while_genuinely_in_flight(tmp_path):
+    """linux_uring only: a Context the caller drops while a submitted
+    Operation is genuinely still in flight must not be collected out from
+    under it - op.context (see the test above) keeps it alive via plain
+    refcounting. Proven here with weakref, independent of the object's
+    own repr/attributes: the outstanding write is blocked on a full pipe
+    with no reader, so it provably cannot have completed yet when `del
+    ctx` runs. Once the pipe is drained and the write actually completes,
+    op.context clears and nothing else references the Context, so the
+    weakref must clear too.
+    """
+    linux_uring = pytest.importorskip("caio.linux_uring")
+    import fcntl  # Unix-only; this whole test is uring-only (Linux-only)
+
+    F_SETPIPE_SZ = 1031
+
+    r_fd, w_fd = os.pipe()
+    try:
+        fcntl.fcntl(w_fd, F_SETPIPE_SZ, 4096)
+        os.write(w_fd, b"f" * 4096)  # fill the pipe so the next write blocks until drained
+
+        ctx = linux_uring.Context(max_requests=8)
+        ctx_ref = weakref.ref(ctx)
+
+        # Offset must be -1 (io_uring's convention for non-seekable files,
+        # same as plain write(2)) - a pipe rejects an explicit offset
+        # outright, which would fail the write instantly instead of
+        # leaving it pending.
+        op = linux_uring.Operation.write(b"pending", w_fd, 0xFFFFFFFFFFFFFFFF)
+        assert ctx.submit(op) == 1
+
+        del ctx
+        gc.collect()
+
+        assert ctx_ref() is not None, (
+            "Context was collected while its Operation was still genuinely "
+            "in flight - op.context should have kept it alive"
+        )
+
+        os.read(r_fd, 8192)  # unblocks the pending write
+        drain(ctx_ref(), 1, timeout=5.0)
+        assert op.get_value() == len(b"pending")
+
+        gc.collect()
+        assert ctx_ref() is None, (
+            "Context outlived its Operation's completion - op.context "
+            "should have been cleared, leaving nothing to keep it alive"
+        )
+    finally:
+        os.close(r_fd)
+        os.close(w_fd)
+
+
 def test_linux_aio_context_becomes_collectible_after_operation_completes(tmp_path):
     """linux_aio only: keeping a *completed* Operation alive - a common
     pattern, e.g. holding onto it to read `.get_value()` again later -
