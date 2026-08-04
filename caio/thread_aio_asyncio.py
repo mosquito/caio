@@ -6,3 +6,6 @@ class AsyncioContext(AsyncioContextBase):
     MAX_REQUESTS_DEFAULT = 512
     OPERATION_CLASS = Operation
     CONTEXT_CLASS = Context
+
+    def _destroy_context(self):
+        self.context.close()
