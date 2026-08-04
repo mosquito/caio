@@ -44,6 +44,15 @@ jobs:
             os: ubuntu-latest
           - python: "3.14"
             os: ubuntu-latest
+          # Fresh build directly under a free-threaded interpreter - none of
+          # the C extensions declare Py_mod_gil support yet, so importing
+          # one (if it compiles here at all) re-enables the GIL for the
+          # whole process. See free-threaded-python-only below for the
+          # actual no-GIL check.
+          - python: "3.13t"
+            os: ubuntu-latest
+          - python: "3.14t"
+            os: ubuntu-latest
           - python: "3.10"
             os: windows-latest
           - python: "3.11"
@@ -80,6 +89,34 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Builds normally under a regular interpreter, then runs the suite through
+  # a free-threaded one of the same X.Y against that same install. The
+  # compiled extensions' SOABI won't match the free-threaded interpreter, so
+  # they simply fail to import (same ImportError path as any unsupported
+  # platform) - only python_aio ends up available, and unlike the `tests`
+  # matrix's own free-threaded entries above, nothing gets the chance to
+  # re-enable the GIL first.
+  free-threaded-python-only:
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "${{ matrix.python }}"
+      - run: uv sync --extra develop
+      - run: uv python install "${{ matrix.python }}t"
+      - name: Run tests under the free-threaded interpreter against this install
+        run: |
+          FREE_THREADED_PYTHON="$(uv python find "${{ matrix.python }}t")"
+          PYTHONPATH="$(pwd)/.venv/lib/python${{ matrix.python }}/site-packages" "$FREE_THREADED_PYTHON" -m pytest -sv tests
+        env:
+          FORCE_COLOR: 1
 
   finish:
     needs:
