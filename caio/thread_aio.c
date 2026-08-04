@@ -917,9 +917,10 @@ static PyObject *AIOOperation_payload_getter(AIOOperation *self, void *closure) 
     }
 
     /* fsync/fdsync Operations never allocate a buffer, and a completed
-     * write's is freed right after its callback runs (see worker()) -
-     * matches T_OBJECT's (as opposed to T_OBJECT_EX's) own NULL-to-None
-     * behavior, which this getter replaces. */
+     * write's is freed in worker() before done is published (i.e. before
+     * this getter could ever observe it) - matches T_OBJECT's (as opposed
+     * to T_OBJECT_EX's) own NULL-to-None behavior, which this getter
+     * replaces. */
     if (self->py_buffer == NULL)
         Py_RETURN_NONE;
 

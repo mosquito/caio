@@ -42,6 +42,7 @@ def test_high_concurrency_stress_no_data_races(tmp_path):
     path = tmp_path / "stress.bin"
     path.write_bytes(b"\x00" * (count * chunk))
     fd = os.open(str(path), os.O_RDWR | _O_BINARY)
+    ctx = None
     try:
         ctx = python_aio.Context(max_requests=count, pool_size=32)
         expected = [bytes([i % 256]) * chunk for i in range(count)]
@@ -91,7 +92,8 @@ def test_high_concurrency_stress_no_data_races(tmp_path):
             assert got == want, f"chunk {i} mismatch"
     finally:
         os.close(fd)
-        ctx.close()
+        if ctx is not None:
+            ctx.close()
 
 
 def test_same_operation_is_claimed_once_across_contexts():
