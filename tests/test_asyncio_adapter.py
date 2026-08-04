@@ -133,6 +133,22 @@ async def test_write_operations_cancel_cleanly(
             asyncio_exception_handler.assert_not_called()
 
 
+@aiomisc.timeout(3)
+async def test_cancel_before_first_step_runs(tmp_path, async_context, asyncio_exception_handler):
+    """Cancelling right after the op's own first step (submit queued, still
+    suspended at `await future`) - covers context.cancel() raising ValueError
+    for an op the backend never actually got to submit to the kernel yet."""
+    context = async_context
+    with open(str(tmp_path / "temp.bin"), "wb+") as fp:  # noqa: ASYNC230
+        fd = fp.fileno()
+        task = asyncio.ensure_future(context.write(b"x", fd, 0))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        asyncio_exception_handler.assert_not_called()
+
+
 @aiomisc.timeout(5)
 async def test_zero_byte_read_and_write(tmp_path, async_context):
     context = async_context

@@ -21,18 +21,11 @@ def named_variant(name, **attrs):
     return ns
 
 
-# Test-only variants of linux_uring/linux_aio with a real, opt-in feature
-# (sqpoll, deferred submission) forced on - not part of caio's public API.
-# functools.partial works without subclassing here: both kwargs are
-# already forwarded/consumed by AsyncioContextBase, and a caller can still
-# override a partial's bound kwarg by passing it again explicitly.
+# Test-only sqpoll/deferred variants - not part of caio's public API.
 extra_context_variants = []
 extra_asyncio_variants = []
 
 if linux_uring is not None:
-    # sqpoll+deferred combined isn't tested - _on_submitted ignores
-    # deferred once sqpoll is negotiated (measured no benefit batching a
-    # flush() that's already close to syscall-free under SQPOLL).
     extra_context_variants.append(named_variant(
         "linux_uring[sqpoll=True]",
         Context=functools.partial(linux_uring.Context, sqpoll=True),
@@ -42,9 +35,13 @@ if linux_uring is not None:
         "linux_uring[sqpoll=True]",
         AsyncioContext=functools.partial(linux_uring_asyncio.AsyncioContext, sqpoll=True),
     ))
+    # sqpoll=False forced: SQPOLL_ALLOWED's default would otherwise mask
+    # the deferred-batching path this variant exists to cover.
     extra_asyncio_variants.append(named_variant(
         "linux_uring[deferred=True]",
-        AsyncioContext=functools.partial(linux_uring_asyncio.AsyncioContext, deferred=True),
+        AsyncioContext=functools.partial(
+            linux_uring_asyncio.AsyncioContext, sqpoll=False, deferred=True,
+        ),
     ))
 
 if linux_aio is not None:
@@ -56,24 +53,14 @@ if linux_aio is not None:
 all_variants = variants + tuple(extra_context_variants)
 all_variants_asyncio = variants_asyncio + tuple(extra_asyncio_variants)
 
-# Known statically, at construction time, rather than via a runtime
-# hasattr() check that a functools.partial-wrapped .Context wouldn't see
-# through: extra_context_variants are always linux_uring-based, hence
-# always polling-capable.
+# extra_context_variants are always linux_uring, always polling-capable -
+# added directly rather than via hasattr() (doesn't see through partial).
 polling_variants = [
     v for v in variants if hasattr(v.Context, "process_events")
 ] + extra_context_variants
 
-# thread_aio and python_aio only - the two backends actually backed by a
-# bounded worker-thread pool (multiprocessing.pool.ThreadPool for both),
-# where max_requests (acceptance capacity) and pool_size (worker count) are
-# genuinely independent, so submitting more than pool_size at once leaves
-# some operations sitting in the pool's own internal queue rather than
-# already dispatched. linux_aio/linux_uring have no such queue - max_requests
-# there bounds the kernel-visible I/O context directly, and neither Context
-# accepts a pool_size argument at all. thread_aio may be None (unavailable
-# on this platform/build) - filtering against variants (already None-free)
-# handles that the same way as everywhere else.
+# Only thread_aio/python_aio have a worker-pool queue distinct from
+# "accepted" - max_requests/pool_size are independent there.
 pooled_variants = tuple(v for v in variants if v in (thread_aio, python_aio))
 
 
@@ -131,11 +118,8 @@ def operation_maker(request):
 
 @pytest.fixture(params=all_variants)
 def backend(request):
-    # Unlike using context_maker/operation_maker together (which would
-    # produce the cross product of both fixtures' independent
-    # parametrization, mismatching e.g. thread_aio's Context with
-    # linux_aio's Operation), this keeps Context/Operation from the same
-    # backend module paired together.
+    # Keeps Context/Operation paired from the same backend, unlike
+    # context_maker+operation_maker's independent cross product.
     return request.param
 
 
@@ -146,11 +130,8 @@ def async_context_maker(request):
 
 @pytest.fixture(params=all_variants_asyncio)
 async def async_context(request):
-    """A ready, already-entered AsyncioContext with default construction
-    args, parametrized over every backend variant. For tests that don't
-    need custom constructor kwargs (the common case) - use
-    async_context_maker instead when a test needs e.g. a specific
-    max_requests."""
+    """Ready, already-entered AsyncioContext, default args. Use
+    async_context_maker instead for a non-default constructor kwarg."""
     async with request.param.AsyncioContext() as context:
         yield context
 

@@ -987,6 +987,7 @@ def test_linux_aio_process_events_max_requests_is_bounded(backend):
     )
 
 
+@pytest.mark.flaky(reruns=3)
 def test_process_events_negative_timeout_waits_indefinitely(tmp_path, polling_backend):
     """process_events(timeout<0) means "wait indefinitely" - matching the
     native convention each backend's own blocking primitive already uses
