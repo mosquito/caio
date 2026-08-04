@@ -10,6 +10,8 @@ class Context(AbstractContext):
     @property
     def pool_size(self) -> int: ...
 
+    def close(self) -> None: ...
+
 
 # noinspection PyPropertyDefinition
 class Operation(AbstractOperation):

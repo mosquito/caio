@@ -96,31 +96,41 @@ static PyObject *AIOOperation_callback_ref(AIOOperation *self) {
 }
 
 
+/*
+ * Stops the thread pool - shared by close() and dealloc().
+ *
+ * The pointer swap shares a critical section with submit()'s dispatch loop
+ * (see there): a no-op under the GIL (already serialized), a real
+ * per-object lock under free-threading. threadpool_destroy() runs outside
+ * that section - self->pool is already NULL by then, so a concurrent
+ * submit() bails immediately instead of waiting on the teardown below.
+ */
+static void
+AIOContext_close_pool(AIOContext *self) {
+    threadpool_t* pool;
+
+    CAIO_BEGIN_CRITICAL_SECTION(self);
+    pool = self->pool;
+    self->pool = NULL;
+    CAIO_END_CRITICAL_SECTION();
+
+    if (pool == NULL) return;
+
+    // Graceful: queued tasks still run instead of leaking their
+    // Py_INCREF'd references. GIL released - workers need it back to run
+    // their callbacks, so holding it here while joining would deadlock.
+    Py_BEGIN_ALLOW_THREADS
+    threadpool_destroy(pool, threadpool_graceful);
+    Py_END_ALLOW_THREADS
+}
+
+
 static void
 AIOContext_dealloc(AIOContext *self) {
     if (self->weakreflist != NULL)
         PyObject_ClearWeakRefs((PyObject *) self);
 
-    if (self->pool != 0) {
-        threadpool_t* pool = self->pool;
-        self->pool = 0;
-
-        // Graceful, not immediate: an immediate shutdown drops any task
-        // still sitting in the queue without ever running worker() on it,
-        // permanently leaking the Py_INCREF'd Operation/Context references
-        // taken at submit() time (this Context can in fact still be
-        // reachable here with work queued - e.g. interpreter shutdown, not
-        // just normal refcounting). GIL released around the call: waiting
-        // for worker threads (via pthread_join inside threadpool_destroy)
-        // would otherwise deadlock, since those workers need to reacquire
-        // the GIL themselves (PyGILState_Ensure() in worker()) to invoke
-        // callbacks/decref, and this thread already holds it. No bound on
-        // how long this can block if a queued op is stuck on slow/hung I/O
-        // - accepted as a known limitation, not fixed here.
-        Py_BEGIN_ALLOW_THREADS
-        threadpool_destroy(pool, threadpool_graceful);
-        Py_END_ALLOW_THREADS
-    }
+    AIOContext_close_pool(self);
 
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
@@ -335,11 +345,6 @@ static PyObject* AIOContext_submit(
         return NULL;
     }
 
-    if (self->pool == NULL) {
-        PyErr_SetString(PyExc_RuntimeError, "self->pool is NULL");
-        return NULL;
-    }
-
     if (!PyTuple_Check(args)) {
         PyErr_SetNone(PyExc_ValueError);
         return NULL;
@@ -377,29 +382,45 @@ static PyObject* AIOContext_submit(
 
     Py_ssize_t j=0;
     int result = 0;
+    int failed = 0;
 
-    for (i=0; i < nr; i++) {
-        // Atomic exchange, not check-then-set: two Contexts racing on the same
-        // Operation must not both dispatch it to a worker.
-        if (CAIO_ATOMIC_LOAD_STORE(ops[i]->in_progress, 1)) continue;
+    // Shares AIOContext_close_pool()'s critical section (see there) - must
+    // cover the whole loop, not just the read, or a concurrent close()
+    // could destroy `pool` between the check and threadpool_add().
+    CAIO_BEGIN_CRITICAL_SECTION(self);
 
-        ops[i]->ctx = (void*) self;
-        Py_INCREF(ops[i]);
-        Py_INCREF(self);
+    threadpool_t* pool = self->pool;
+    if (pool == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "self->pool is NULL");
+        failed = 1;
+    } else {
+        for (i=0; i < nr; i++) {
+            // Atomic exchange, not check-then-set: two Contexts racing on
+            // the same Operation must not both dispatch it to a worker.
+            if (CAIO_ATOMIC_LOAD_STORE(ops[i]->in_progress, 1)) continue;
 
-        result = threadpool_add(self->pool, worker, (void*) ops[i], 0);
-        if (process_pool_error(result) < 0) {
-            CAIO_ATOMIC_STORE(ops[i]->in_progress, 0);
-            ops[i]->ctx = NULL;
-            Py_DECREF(ops[i]);
-            Py_DECREF(self);
-            PyMem_Free(ops);
-            return NULL;
+            ops[i]->ctx = (void*) self;
+            Py_INCREF(ops[i]);
+            Py_INCREF(self);
+
+            result = threadpool_add(pool, worker, (void*) ops[i], 0);
+            if (process_pool_error(result) < 0) {
+                CAIO_ATOMIC_STORE(ops[i]->in_progress, 0);
+                ops[i]->ctx = NULL;
+                Py_DECREF(ops[i]);
+                Py_DECREF(self);
+                failed = 1;
+                break;
+            }
+            j++;
         }
-        j++;
     }
 
+    CAIO_END_CRITICAL_SECTION();
+
     PyMem_Free(ops);
+
+    if (failed) return NULL;
     return (PyObject*) PyLong_FromSsize_t(j);
 }
 
@@ -413,6 +434,19 @@ static PyObject* AIOContext_cancel(
     AIOContext *self, PyObject *args
 ) {
     return (PyObject*) PyLong_FromSsize_t(0);
+}
+
+
+PyDoc_STRVAR(AIOContext_close_docstring,
+    "Stops the native thread pool. Idempotent - a second call is a no-op.\n\n"
+    "Graceful: any Operation already running or still queued gets to run "
+    "to completion first. submit() after close() raises RuntimeError."
+);
+static PyObject* AIOContext_close(
+    AIOContext *self, PyObject *Py_UNUSED(ignored)
+) {
+    AIOContext_close_pool(self);
+    Py_RETURN_NONE;
 }
 
 
@@ -447,6 +481,11 @@ static PyMethodDef AIOContext_methods[] = {
         "cancel",
         (PyCFunction) AIOContext_cancel, METH_VARARGS,
         AIOContext_cancel_docstring
+    },
+    {
+        "close",
+        (PyCFunction) AIOContext_close, METH_NOARGS,
+        AIOContext_close_docstring
     },
     {NULL}  /* Sentinel */
 };
