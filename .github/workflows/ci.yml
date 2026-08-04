@@ -44,15 +44,17 @@ jobs:
             os: ubuntu-latest
           - python: "3.14"
             os: ubuntu-latest
-          # Fresh build directly under a free-threaded interpreter - none of
-          # the C extensions declare Py_mod_gil support yet, so importing
-          # one (if it compiles here at all) re-enables the GIL for the
-          # whole process. See free-threaded-python-only below for the
-          # actual no-GIL check.
+          # Fresh build under a free-threaded interpreter. None of the C
+          # extensions declare Py_mod_gil yet, so importing one re-enables
+          # the GIL by default - PYTHON_GIL=0 below keeps it off anyway so
+          # the suite actually exercises real no-GIL concurrency (their
+          # thread-safety is what tests/test_free_threading.py checks).
           - python: "3.13t"
             os: ubuntu-latest
+            free_threaded: true
           - python: "3.14t"
             os: ubuntu-latest
+            free_threaded: true
           - python: "3.10"
             os: windows-latest
           - python: "3.11"
@@ -84,6 +86,7 @@ jobs:
           COVERALLS_PARALLEL: 'true'
           COVERALLS_SERVICE_NAME: github
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHON_GIL: ${{ matrix.free_threaded && '0' || '' }}
       - name: Report coverage
         run: uv run coveralls
         continue-on-error: true

@@ -35,7 +35,7 @@ jobs:
       contents: write
     strategy:
       matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314]
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp313-cp313t, cp314-cp314t]
     steps:
       - uses: actions/checkout@v4
       - name: Set version from release tag
@@ -61,7 +61,7 @@ jobs:
       contents: write
     strategy:
       matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314]
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp313-cp313t, cp314-cp314t]
     steps:
       - uses: actions/checkout@v4
       - name: Set version from release tag
@@ -87,7 +87,7 @@ jobs:
       contents: write
     strategy:
       matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314]
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp313-cp313t, cp314-cp314t]
     steps:
       - uses: actions/checkout@v4
       - name: Set version from release tag
@@ -124,7 +124,7 @@ jobs:
       contents: write
     strategy:
       matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314]
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp313-cp313t, cp314-cp314t]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -154,17 +154,15 @@ jobs:
       contents: write
     strategy:
       matrix:
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.13t", "3.14t"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - name: Set version from release tag
-        run: uv version --frozen "${GITHUB_REF_NAME#v}"
-      - uses: actions/setup-python@v5
         with:
           python-version: "${{ matrix.python }}"
-      - run: pip install build
-      - run: python -m build --wheel
+      - name: Set version from release tag
+        run: uv version --frozen "${GITHUB_REF_NAME#v}"
+      - run: uv build --wheel
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-macos-${{ matrix.python }}
