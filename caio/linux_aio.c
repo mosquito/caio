@@ -11,6 +11,33 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <structmember.h>
+
+#if PY_VERSION_HEX >= 0x030D0000 && defined(Py_GIL_DISABLED)
+#define CAIO_BEGIN_CRITICAL_SECTION(object) \
+    PyCriticalSection caio_critical_section; \
+    PyCriticalSection_Begin( \
+        &caio_critical_section, (PyObject *)(object) \
+    )
+#define CAIO_END_CRITICAL_SECTION() \
+    PyCriticalSection_End(&caio_critical_section)
+#else
+#define CAIO_BEGIN_CRITICAL_SECTION(object)
+#define CAIO_END_CRITICAL_SECTION()
+#endif
+
+#define CAIO_ATOMIC_LOAD(value) \
+    __atomic_load_n(&(value), __ATOMIC_ACQUIRE)
+#define CAIO_ATOMIC_STORE(value, new_value) \
+    __atomic_store_n(&(value), (new_value), __ATOMIC_RELEASE)
+#define CAIO_ATOMIC_LOAD_STORE(value, new_value) \
+    __atomic_exchange_n(&(value), (new_value), __ATOMIC_ACQ_REL)
+
+#if PY_VERSION_HEX >= 0x030D0000 && defined(Py_GIL_DISABLED)
+#define CAIO_DECLARE_FREE_THREADED(module) \
+    PyUnstable_Module_SetGIL((module), Py_MOD_GIL_NOT_USED)
+#else
+#define CAIO_DECLARE_FREE_THREADED(module) 0
+#endif
 #include <sys/utsname.h>
 
 
@@ -152,6 +179,15 @@ static PyTypeObject* AIOOperationTypeP = NULL;
 static PyTypeObject* AIOContextTypeP = NULL;
 
 
+static PyObject *AIOOperation_callback_ref(AIOOperation *self) {
+    PyObject *callback;
+    CAIO_BEGIN_CRITICAL_SECTION(self);
+    callback = Py_XNewRef(self->callback);
+    CAIO_END_CRITICAL_SECTION();
+    return callback;
+}
+
+
 static void
 AIOContext_dealloc(AIOContext *self) {
     if (self->weakreflist != NULL)
@@ -276,21 +312,16 @@ static PyObject* AIOContext_submit(AIOContext *self, PyObject *args) {
         return NULL;
     }
 
-    /* Skip anything already in_progress (this exact Operation submitted
-     * earlier and not yet completed) - otherwise the kernel would get
-     * handed the very same embedded iocb struct a second time, and two
-     * completions would eventually deliver for one Python object. Every
-     * claimed op's context is reset first (Py_XDECREF, not just an
-     * overwrite) since a previously-completed submission never clears it -
-     * without this, a normal resubmit after completion silently leaks the
-     * old context reference forever. */
+    /* Atomic exchange, not check-then-set: two Contexts racing on the same Operation
+     * must not both hand its iocb to the kernel. Context reset via
+     * Py_XDECREF, not overwrite - a previously-completed submission never
+     * clears it. */
     Py_ssize_t to_submit = 0;
     for (Py_ssize_t i = 0; i < nr; i++) {
         AIOOperation *op = (AIOOperation *) PyTuple_GET_ITEM(args, i);
-        if (op->in_progress)
-            continue;
 
-        op->in_progress = 1;
+        if (CAIO_ATOMIC_LOAD_STORE(op->in_progress, 1)) continue;
+
         Py_XDECREF(op->context);
         op->context = self;
         Py_INCREF(self);
@@ -317,7 +348,7 @@ static PyObject* AIOContext_submit(AIOContext *self, PyObject *args) {
          * each op is exactly as retryable as it was before this call. */
         for (Py_ssize_t i = 0; i < to_submit; i++) {
             AIOOperation *op = claimed[i];
-            op->in_progress = 0;
+            CAIO_ATOMIC_STORE(op->in_progress, 0);
             Py_CLEAR(op->context);
             Py_DECREF(op);
         }
@@ -333,7 +364,7 @@ static PyObject* AIOContext_submit(AIOContext *self, PyObject *args) {
      * back the same way instead of leaking its claim forever. */
     for (Py_ssize_t i = result; i < to_submit; i++) {
         AIOOperation *op = claimed[i];
-        op->in_progress = 0;
+        CAIO_ATOMIC_STORE(op->in_progress, 0);
         Py_CLEAR(op->context);
         Py_DECREF(op);
     }
@@ -391,15 +422,18 @@ static PyObject* AIOContext_cancel(AIOContext *self, PyObject *args, PyObject *k
      * the (paused) Rust rewrite; a cancelled Operation is still terminal,
      * not retryable, only a fresh one constructed for a retry. */
     Py_CLEAR(op->context);
-    op->done = 1;
+    CAIO_ATOMIC_STORE(op->done, 1);
 
-    if (op->callback != NULL) {
-        PyObject *rv = PyObject_CallFunction(op->callback, "K", ev.res);
+    PyObject *callback = AIOOperation_callback_ref(op);
+    if (callback != NULL) {
+        PyObject *rv = PyObject_CallFunction(callback, "K", ev.res);
         if (rv == NULL) {
+            Py_DECREF(callback);
             Py_DECREF(op);
             return NULL;
         }
         Py_DECREF(rv);
+        Py_DECREF(callback);
     }
 
     Py_DECREF(op);
@@ -524,22 +558,24 @@ static PyObject* AIOContext_process_events(
 
         op = (AIOOperation*)(uintptr_t) ev->data;
 
-        Py_CLEAR(op->context);
-        op->done = 1;
-
         if (ev->res >= 0) {
             op->iocb.aio_nbytes = ev->res;
         } else {
             op->error = -ev->res;
         }
 
-        if (op->callback != NULL) {
-            PyObject *rv = PyObject_CallFunction(op->callback, "K", ev->res);
+        Py_CLEAR(op->context);
+        CAIO_ATOMIC_STORE(op->done, 1);
+
+        PyObject *callback = AIOOperation_callback_ref(op);
+        if (callback != NULL) {
+            PyObject *rv = PyObject_CallFunction(callback, "K", ev->res);
             if (rv == NULL) {
-                PyErr_WriteUnraisable(op->callback);
+                PyErr_WriteUnraisable(callback);
             } else {
                 Py_DECREF(rv);
             }
+            Py_DECREF(callback);
         }
 
         Py_DECREF(op);
@@ -990,7 +1026,10 @@ PyDoc_STRVAR(AIOOperation_get_value_docstring,
 static PyObject* AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
 ) {
-    if (self->in_progress && !self->done) {
+    if (
+        CAIO_ATOMIC_LOAD(self->in_progress) &&
+        !CAIO_ATOMIC_LOAD(self->done)
+    ) {
         PyErr_SetString(
             PyExc_RuntimeError,
             "get_value() is not available while the operation is in flight"
@@ -1044,6 +1083,7 @@ static PyObject* AIOOperation_set_callback(
     static char *kwlist[] = {"callback", NULL};
 
     PyObject* callback;
+    PyObject* old_callback;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "O", kwlist,
@@ -1062,13 +1102,20 @@ static PyObject* AIOOperation_set_callback(
     }
 
     Py_INCREF(callback);
+    CAIO_BEGIN_CRITICAL_SECTION(self);
+    old_callback = self->callback;
     self->callback = callback;
+    CAIO_END_CRITICAL_SECTION();
+    Py_XDECREF(old_callback);
 
     Py_RETURN_TRUE;
 }
 
 static PyObject *AIOOperation_payload_getter(AIOOperation *self, void *closure) {
-    if (self->in_progress && !self->done) {
+    if (
+        CAIO_ATOMIC_LOAD(self->in_progress) &&
+        !CAIO_ATOMIC_LOAD(self->done)
+    ) {
         PyErr_SetString(
             PyExc_RuntimeError,
             "payload is not available while the operation is in flight"
@@ -1251,6 +1298,10 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
     m = PyModule_Create(&linux_aio_module);
 
     if (m == NULL) return NULL;
+    if (CAIO_DECLARE_FREE_THREADED(m) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
 
     if (PyType_Ready(AIOContextTypeP) < 0) return NULL;
 
@@ -1274,4 +1325,3 @@ PyMODINIT_FUNC PyInit_linux_aio(void) {
 
     return m;
 }
-

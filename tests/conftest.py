@@ -1,4 +1,5 @@
 import functools
+import threading
 import time
 import types
 
@@ -14,6 +15,112 @@ from caio import (
     variants,
     variants_asyncio,
 )
+
+
+class ConcurrentThreads:
+    """Run test workers and surface their failures in the main thread."""
+
+    def __init__(self, timeout=30):
+        self.timeout = timeout
+        self._barriers = []
+        self._threads = []
+        self._errors = []
+        self._errors_lock = threading.Lock()
+
+    def barrier(self, parties):
+        barrier = threading.Barrier(parties, timeout=self.timeout)
+        self._barriers.append(barrier)
+        return barrier
+
+    def start(self, target, *args):
+        thread = threading.Thread(
+            target=self._run,
+            args=(target, args),
+            name=f"{target.__name__}-{len(self._threads)}",
+        )
+        self._threads.append(thread)
+        thread.start()
+        return thread
+
+    def start_many(self, target, arguments):
+        for args in arguments:
+            self.start(target, *args)
+
+    def join(self, timeout=None):
+        deadline = time.monotonic() + (
+            self.timeout if timeout is None else timeout
+        )
+        for thread in self._threads:
+            thread.join(max(0, deadline - time.monotonic()))
+
+        alive = [thread.name for thread in self._threads if thread.is_alive()]
+        assert not alive, f"worker threads did not stop: {', '.join(alive)}"
+        if self._errors:
+            raise self._errors[0]
+
+    def close(self):
+        for barrier in self._barriers:
+            barrier.abort()
+        for thread in self._threads:
+            thread.join(timeout=5)
+
+    def _run(self, target, args):
+        try:
+            target(*args)
+        except BaseException as exc:  # noqa: BLE001 (surface child-thread failures)
+            with self._errors_lock:
+                self._errors.append(exc)
+            for barrier in self._barriers:
+                barrier.abort()
+
+
+@pytest.fixture
+def workers():
+    threads = ConcurrentThreads()
+    yield threads
+    threads.close()
+
+
+@pytest.fixture
+def submit_and_wait():
+    def submit(context, operations, result_for=None, timeout=10):
+        operations = tuple(operations)
+        count = len(operations)
+        results = [None] * count
+        remaining = [count]
+        errors = []
+        lock = threading.Lock()
+        done = threading.Event()
+
+        if result_for is None:
+            result_for = lambda _operation, result: result
+
+        def make_callback(index, operation):
+            def callback(result):
+                with lock:
+                    try:
+                        results[index] = result_for(operation, result)
+                    except BaseException as exc:  # noqa: BLE001 (surface callback failures)
+                        errors.append(exc)
+                    finally:
+                        remaining[0] -= 1
+                        if remaining[0] == 0:
+                            done.set()
+
+            return callback
+
+        for index, operation in enumerate(operations):
+            operation.set_callback(make_callback(index, operation))
+            assert context.submit(operation) == 1
+
+        assert done.wait(timeout), (
+            f"only {count - remaining[0]}/{count} operations completed"
+        )
+        if errors:
+            raise errors[0]
+        return results
+
+    return submit
 
 
 def named_variant(name, **attrs):

@@ -44,6 +44,17 @@ jobs:
             os: ubuntu-latest
           - python: "3.14"
             os: ubuntu-latest
+          # Fresh build under a free-threaded interpreter. None of the C
+          # extensions declare Py_mod_gil yet, so importing one re-enables
+          # the GIL by default - PYTHON_GIL=0 below keeps it off anyway so
+          # the suite actually exercises real no-GIL concurrency (their
+          # thread-safety is what tests/test_free_threading.py checks).
+          - python: "3.13t"
+            os: ubuntu-latest
+            free_threaded: true
+          - python: "3.14t"
+            os: ubuntu-latest
+            free_threaded: true
           - python: "3.10"
             os: windows-latest
           - python: "3.11"
@@ -75,11 +86,40 @@ jobs:
           COVERALLS_PARALLEL: 'true'
           COVERALLS_SERVICE_NAME: github
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHON_GIL: ${{ matrix.free_threaded && '0' || '' }}
       - name: Report coverage
         run: uv run coveralls
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Builds normally under a regular interpreter, then runs the suite through
+  # a free-threaded one of the same X.Y against that same install. The
+  # compiled extensions' SOABI won't match the free-threaded interpreter, so
+  # they simply fail to import (same ImportError path as any unsupported
+  # platform) - only python_aio ends up available, and unlike the `tests`
+  # matrix's own free-threaded entries above, nothing gets the chance to
+  # re-enable the GIL first.
+  free-threaded-python-only:
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "${{ matrix.python }}"
+      - run: uv sync --extra develop
+      - run: uv python install "${{ matrix.python }}t"
+      - name: Run tests under the free-threaded interpreter against this install
+        run: |
+          FREE_THREADED_PYTHON="$(uv python find "${{ matrix.python }}t")"
+          PYTHONPATH="$(pwd)/.venv/lib/python${{ matrix.python }}/site-packages" "$FREE_THREADED_PYTHON" -m pytest -sv tests
+        env:
+          FORCE_COLOR: 1
 
   finish:
     needs:

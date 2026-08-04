@@ -2,13 +2,13 @@ import operator
 import os
 import sys
 import threading
-from collections import defaultdict
 from collections.abc import Callable
 from enum import IntEnum, unique
 from multiprocessing.pool import ThreadPool
 from threading import Lock, RLock
 from types import MappingProxyType
 from typing import Any
+from weakref import WeakValueDictionary
 
 from .abstract import AbstractContext, AbstractOperation
 
@@ -63,8 +63,8 @@ class Context(AbstractContext):
         self._state = ContextState.OPEN
 
         if not NATIVE_PREAD_PWRITE:
-            self._locks_cleaner = RLock()       # type: ignore
-            self._locks = defaultdict(RLock)    # type: ignore
+            self._locks_cleaner = Lock()
+            self._locks: WeakValueDictionary = WeakValueDictionary()
 
     @property
     def max_requests(self) -> int:
@@ -80,7 +80,8 @@ class Context(AbstractContext):
         there kills that thread, silently stalling every future
         result/callback for the rest of this Context's lifetime.
         """
-        callback = operation.callback
+        with operation._lock:
+            callback = operation.callback
         if callback is None:
             return
 
@@ -105,9 +106,9 @@ class Context(AbstractContext):
         must reset operation.in_progress, since the operation never
         actually ran and must stay retryable.
         """
-        with self._lock:
-            self._in_progress -= 1
+        with operation._lock, self._lock:
             operation.in_progress = False
+            self._in_progress -= 1
 
     def _execute(self, operation: "Operation") -> bool:
         """
@@ -133,12 +134,11 @@ class Context(AbstractContext):
             operation.written = result
             self._invoke_callback(operation, result)
 
-        # operation.in_progress is checked and set under the same lock as
-        # the capacity check/reservation - otherwise two concurrent
-        # submits of the very same Operation (or the same object appearing
-        # twice in one submit(op, op) call) could both see it unset and
-        # both dispatch, running the I/O twice against one result object.
-        with self._lock:
+        # operation.in_progress is the Operation's own lock, not this
+        # Context's - two different Contexts submitting the same Operation
+        # only ever share the Operation, never a Context, so a per-Context
+        # lock alone can't stop them both from claiming it.
+        with operation._lock, self._lock:
             if operation.in_progress:
                 return False
 
@@ -150,8 +150,8 @@ class Context(AbstractContext):
                     "Maximum simultaneous requests have been reached",
                 )
 
-            self._in_progress += 1
             operation.in_progress = True
+            self._in_progress += 1
 
         try:
             self.pool.apply_async(
@@ -176,14 +176,28 @@ class Context(AbstractContext):
         def __pwrite(self, fd, bytes, offset):
             return os.pwrite(fd, bytes, offset)
     else:
+        def __fd_lock(self, fd):
+            # Plain get-or-create under _locks_cleaner - two threads racing
+            # on the same fd's first access must get back the same RLock,
+            # or their lseek()+read()/write() pairs can interleave. The
+            # WeakValueDictionary itself only keeps an fd's entry alive
+            # while some __pread()/__pwrite() call still holds a strong ref
+            # to it (the `with` block below) - otherwise this Context would
+            # accumulate one RLock per fd it's ever touched, forever.
+            with self._locks_cleaner:
+                lock = self._locks.get(fd)
+                if lock is None:
+                    lock = self._locks[fd] = RLock()
+                return lock
+
         def __pread(self, fd, size, offset):
-            with self._locks[fd]:
+            with self.__fd_lock(fd):
                 os.lseek(fd, 0, os.SEEK_SET)
                 os.lseek(fd, offset, os.SEEK_SET)
                 return os.read(fd, size)
 
         def __pwrite(self, fd, bytes, offset):
-            with self._locks[fd]:
+            with self.__fd_lock(fd):
                 os.lseek(fd, 0, os.SEEK_SET)
                 os.lseek(fd, offset, os.SEEK_SET)
                 return os.write(fd, bytes)
@@ -305,6 +319,7 @@ class Operation(AbstractOperation):
 
         self.callback: Callable[[int], Any] | None = None
         self.in_progress = False
+        self._lock = Lock()
         self.buffer: bytes = buffer
 
         self.opcode = opcode
@@ -391,5 +406,6 @@ class Operation(AbstractOperation):
     def set_callback(self, callback: Callable[[int], Any]) -> bool:
         if not callable(callback):
             raise ValueError(f"callback must be callable, got {callback!r}")  # noqa: TRY004 (pre-existing public exception type, not changing it here)
-        self.callback = callback
+        with self._lock:
+            self.callback = callback
         return True
