@@ -2,13 +2,13 @@ import operator
 import os
 import sys
 import threading
-from collections import defaultdict
 from collections.abc import Callable
 from enum import IntEnum, unique
 from multiprocessing.pool import ThreadPool
 from threading import Lock, RLock
 from types import MappingProxyType
 from typing import Any
+from weakref import WeakValueDictionary
 
 from .abstract import AbstractContext, AbstractOperation
 
@@ -63,8 +63,8 @@ class Context(AbstractContext):
         self._state = ContextState.OPEN
 
         if not NATIVE_PREAD_PWRITE:
-            self._locks_cleaner = RLock()       # type: ignore
-            self._locks = defaultdict(RLock)    # type: ignore
+            self._locks_cleaner = Lock()
+            self._locks: WeakValueDictionary = WeakValueDictionary()
 
     @property
     def max_requests(self) -> int:
@@ -176,14 +176,28 @@ class Context(AbstractContext):
         def __pwrite(self, fd, bytes, offset):
             return os.pwrite(fd, bytes, offset)
     else:
+        def __fd_lock(self, fd):
+            # Plain get-or-create under _locks_cleaner - two threads racing
+            # on the same fd's first access must get back the same RLock,
+            # or their lseek()+read()/write() pairs can interleave. The
+            # WeakValueDictionary itself only keeps an fd's entry alive
+            # while some __pread()/__pwrite() call still holds a strong ref
+            # to it (the `with` block below) - otherwise this Context would
+            # accumulate one RLock per fd it's ever touched, forever.
+            with self._locks_cleaner:
+                lock = self._locks.get(fd)
+                if lock is None:
+                    lock = self._locks[fd] = RLock()
+                return lock
+
         def __pread(self, fd, size, offset):
-            with self._locks[fd]:
+            with self.__fd_lock(fd):
                 os.lseek(fd, 0, os.SEEK_SET)
                 os.lseek(fd, offset, os.SEEK_SET)
                 return os.read(fd, size)
 
         def __pwrite(self, fd, bytes, offset):
-            with self._locks[fd]:
+            with self.__fd_lock(fd):
                 os.lseek(fd, 0, os.SEEK_SET)
                 os.lseek(fd, offset, os.SEEK_SET)
                 return os.write(fd, bytes)

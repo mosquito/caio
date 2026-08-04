@@ -12,6 +12,10 @@ import pytest
 import caio
 from caio import python_aio
 
+# os.open() defaults to text mode on Windows without this - \n <-> \r\n
+# translation would corrupt any payload containing a raw \n byte.
+_O_BINARY = getattr(os, "O_BINARY", 0)
+
 
 def test_importing_caio_does_not_enable_gil():
     """Every importable C backend must declare and support free threading."""
@@ -37,7 +41,7 @@ def test_high_concurrency_stress_no_data_races(tmp_path):
     chunk = 4096
     path = tmp_path / "stress.bin"
     path.write_bytes(b"\x00" * (count * chunk))
-    fd = os.open(str(path), os.O_RDWR)
+    fd = os.open(str(path), os.O_RDWR | _O_BINARY)
     try:
         ctx = python_aio.Context(max_requests=count, pool_size=32)
         expected = [bytes([i % 256]) * chunk for i in range(count)]
@@ -301,7 +305,7 @@ def test_same_operation_is_claimed_once_across_contexts_all_backends(
     iterations = ft_claim_operation_count
     claim_window = min(iterations, 512)
     path = tmp_path / "cross-context-claim.bin"
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | _O_BINARY, 0o600)
     contexts = tuple(
         backend.Context(max_requests=claim_window)
         for _ in range(ft_claimant_count)
@@ -403,7 +407,7 @@ def test_concurrent_submits_to_one_context_all_backends(
     operations_per_worker_total = operations_per_worker * submit_rounds
     total = worker_count * operations_per_worker_total
     path = tmp_path / "one-context-submit.bin"
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | _O_BINARY, 0o600)
     context = backend.Context(max_requests=total)
     submit_start = threading.Barrier(worker_count, timeout=30)
     operations = []
@@ -499,7 +503,7 @@ def test_concurrent_process_events_delivers_each_completion_once(
     drainer_count = ft_drainer_count
     drain_rounds = ft_drain_rounds
     path = tmp_path / "concurrent-process-events.bin"
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | _O_BINARY, 0o600)
     context = polling_backend.Context(max_requests=operation_count)
     callback_counts = [0] * operation_count
     callback_lock = threading.Lock()
@@ -592,7 +596,7 @@ def test_completed_operation_supports_concurrent_readers(
     payload = bytes(range(256)) * 16
     path = tmp_path / "concurrent-result-readers.bin"
     path.write_bytes(payload)
-    fd = os.open(path, os.O_RDONLY)
+    fd = os.open(path, os.O_RDONLY | _O_BINARY)
     context = backend.Context(max_requests=8)
     operation = backend.Operation.read(len(payload), fd, 0)
     completed = threading.Event()
@@ -658,7 +662,7 @@ def test_payload_access_is_safe_while_worker_publishes_completion(
     operation_count = ft_completion_count
     observer_count = ft_observer_count
     path = tmp_path / "payload-completion-race.bin"
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | _O_BINARY, 0o600)
     context = pooled_backend.Context(
         max_requests=operation_count + 1,
         pool_size=1,
