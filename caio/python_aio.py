@@ -80,7 +80,8 @@ class Context(AbstractContext):
         there kills that thread, silently stalling every future
         result/callback for the rest of this Context's lifetime.
         """
-        callback = operation.callback
+        with operation._lock:
+            callback = operation.callback
         if callback is None:
             return
 
@@ -105,9 +106,9 @@ class Context(AbstractContext):
         must reset operation.in_progress, since the operation never
         actually ran and must stay retryable.
         """
-        with self._lock:
+        with operation._lock, self._lock:
+            operation.in_progress = False
             self._in_progress -= 1
-        operation._unclaim()
 
     def _execute(self, operation: "Operation") -> bool:
         """
@@ -133,24 +134,23 @@ class Context(AbstractContext):
             operation.written = result
             self._invoke_callback(operation, result)
 
-        # The claim itself is synchronized by the Operation's own lock, not
-        # this Context's - two different Contexts submitting the same
-        # Operation only ever share the Operation, never a Context, so a
-        # per-Context lock here can't stop them both from claiming it.
-        if not operation._claim():
-            return False
+        # operation.in_progress is the Operation's own lock, not this
+        # Context's - two different Contexts submitting the same Operation
+        # only ever share the Operation, never a Context, so a per-Context
+        # lock alone can't stop them both from claiming it.
+        with operation._lock, self._lock:
+            if operation.in_progress:
+                return False
 
-        with self._lock:
             if self._state != ContextState.OPEN:
-                operation._unclaim()
                 raise RuntimeError("Context is closed")
 
             if self._in_progress >= self.__max_requests:
-                operation._unclaim()
                 raise RuntimeError(
                     "Maximum simultaneous requests have been reached",
                 )
 
+            operation.in_progress = True
             self._in_progress += 1
 
         try:
@@ -317,20 +317,6 @@ class Operation(AbstractOperation):
         self.exception = None
         self.written = 0
 
-    def _claim(self) -> bool:
-        """Atomically claims this Operation for execution - False if some
-        Context (this one or another) already claimed it first."""
-        with self._lock:
-            if self.in_progress:
-                return False
-            self.in_progress = True
-            return True
-
-    def _unclaim(self) -> None:
-        """Reverts a claim that never actually got scheduled."""
-        with self._lock:
-            self.in_progress = False
-
     @classmethod
     def read(
         cls, nbytes: int, fd: int, offset: int, priority=0,
@@ -406,5 +392,6 @@ class Operation(AbstractOperation):
     def set_callback(self, callback: Callable[[int], Any]) -> bool:
         if not callable(callback):
             raise ValueError(f"callback must be callable, got {callback!r}")  # noqa: TRY004 (pre-existing public exception type, not changing it here)
-        self.callback = callback
+        with self._lock:
+            self.callback = callback
         return True

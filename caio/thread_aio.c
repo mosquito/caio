@@ -6,6 +6,33 @@
 #include <Python.h>
 #include <structmember.h>
 
+#if PY_VERSION_HEX >= 0x030D0000 && defined(Py_GIL_DISABLED)
+#define CAIO_BEGIN_CRITICAL_SECTION(object) \
+    PyCriticalSection caio_critical_section; \
+    PyCriticalSection_Begin( \
+        &caio_critical_section, (PyObject *)(object) \
+    )
+#define CAIO_END_CRITICAL_SECTION() \
+    PyCriticalSection_End(&caio_critical_section)
+#else
+#define CAIO_BEGIN_CRITICAL_SECTION(object)
+#define CAIO_END_CRITICAL_SECTION()
+#endif
+
+#define CAIO_ATOMIC_LOAD(value) \
+    __atomic_load_n(&(value), __ATOMIC_ACQUIRE)
+#define CAIO_ATOMIC_STORE(value, new_value) \
+    __atomic_store_n(&(value), (new_value), __ATOMIC_RELEASE)
+#define CAIO_ATOMIC_LOAD_STORE(value, new_value) \
+    __atomic_exchange_n(&(value), (new_value), __ATOMIC_ACQ_REL)
+
+#if PY_VERSION_HEX >= 0x030D0000 && defined(Py_GIL_DISABLED)
+#define CAIO_DECLARE_FREE_THREADED(module) \
+    PyUnstable_Module_SetGIL((module), Py_MOD_GIL_NOT_USED)
+#else
+#define CAIO_DECLARE_FREE_THREADED(module) 0
+#endif
+
 #include "src/threadpool/threadpool.h"
 
 
@@ -58,6 +85,15 @@ enum THAIO_OP_CODE {
     THAIO_FDSYNC,
     THAIO_NOOP,
 };
+
+
+static PyObject *AIOOperation_callback_ref(AIOOperation *self) {
+    PyObject *callback;
+    CAIO_BEGIN_CRITICAL_SECTION(self);
+    callback = Py_XNewRef(self->callback);
+    CAIO_END_CRITICAL_SECTION();
+    return callback;
+}
 
 
 static void
@@ -219,22 +255,25 @@ void worker(void *arg) {
         op->buf_size = result;
     }
 
-    /* Release store, paired with payload/get_value()'s acquire load of
-     * done - the plain writes to result/error/buf_size above happen on
-     * this thread without holding the GIL, so without a real memory
-     * barrier a concurrent GIL-holding reader on another thread has no
-     * guarantee of ever observing them (or of observing them in this
-     * order), regardless of in_progress. */
-    __atomic_store_n(&op->done, 1, __ATOMIC_RELEASE);
-
     state = PyGILState_Ensure();
-    if (op->callback != NULL) {
-        PyObject_CallFunction(op->callback, "i", result);
+    if (op->opcode == THAIO_WRITE) {
+        Py_CLEAR(op->py_buffer);
     }
 
-    if (op->opcode == THAIO_WRITE) {
-        Py_DECREF(op->py_buffer);
-        op->py_buffer = NULL;
+    /* Publish completion only after every result field and Python-owned
+     * buffer transition is complete. payload/get_value() acquire-load done,
+     * so a reader that observes true must also observe all writes above. */
+    CAIO_ATOMIC_STORE(op->done, 1);
+
+    PyObject *callback = AIOOperation_callback_ref(op);
+    if (callback != NULL) {
+        PyObject *rv = PyObject_CallFunction(callback, "i", result);
+        if (rv == NULL) {
+            PyErr_WriteUnraisable(callback);
+        } else {
+            Py_DECREF(rv);
+        }
+        Py_DECREF(callback);
     }
 
     Py_DECREF(ctx);
@@ -340,28 +379,17 @@ static PyObject* AIOContext_submit(
     int result = 0;
 
     for (i=0; i < nr; i++) {
-        if (ops[i]->in_progress) continue;
+        // Atomic exchange, not check-then-set: two Contexts racing on the same
+        // Operation must not both dispatch it to a worker.
+        if (CAIO_ATOMIC_LOAD_STORE(ops[i]->in_progress, 1)) continue;
 
-        // Claim the op (mark in_progress, set ctx, take references) only
-        // right before actually handing it to the pool - previously this
-        // was done for every argument up front, in the first loop above,
-        // even for ops this call was about to skip as already in_progress.
-        // That silently overwrote an in-flight op's ctx pointer with no
-        // matching incref, leaking the old Context's reference and leaving
-        // the original worker()'s eventual Py_DECREF(ctx) to decrement the
-        // wrong (new) Context instead - a real use-after-free/over-decref
-        // risk, not just a leak. A threadpool_add() failure below must
-        // also leave this op exactly as retryable as before this call,
-        // not permanently stuck in_progress=1 with no worker ever assigned
-        // to clear it.
-        ops[i]->in_progress = 1;
         ops[i]->ctx = (void*) self;
         Py_INCREF(ops[i]);
         Py_INCREF(self);
 
         result = threadpool_add(self->pool, worker, (void*) ops[i], 0);
         if (process_pool_error(result) < 0) {
-            ops[i]->in_progress = 0;
+            CAIO_ATOMIC_STORE(ops[i]->in_progress, 0);
             ops[i]->ctx = NULL;
             Py_DECREF(ops[i]);
             Py_DECREF(self);
@@ -790,7 +818,10 @@ PyDoc_STRVAR(AIOOperation_get_value_docstring,
 static PyObject* AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
 ) {
-    if (self->in_progress && !__atomic_load_n(&self->done, __ATOMIC_ACQUIRE)) {
+    if (
+        CAIO_ATOMIC_LOAD(self->in_progress) &&
+        !CAIO_ATOMIC_LOAD(self->done)
+    ) {
         PyErr_SetString(
             PyExc_RuntimeError,
             "get_value() is not available while the operation is in flight"
@@ -844,6 +875,7 @@ static PyObject* AIOOperation_set_callback(
     static char *kwlist[] = {"callback", NULL};
 
     PyObject* callback;
+    PyObject* old_callback;
 
     int argIsOk = PyArg_ParseTupleAndKeywords(
         args, kwds, "O", kwlist,
@@ -862,14 +894,21 @@ static PyObject* AIOOperation_set_callback(
     }
 
     Py_INCREF(callback);
+    CAIO_BEGIN_CRITICAL_SECTION(self);
+    old_callback = self->callback;
     self->callback = callback;
+    CAIO_END_CRITICAL_SECTION();
+    Py_XDECREF(old_callback);
 
     Py_RETURN_TRUE;
 }
 
 
 static PyObject *AIOOperation_payload_getter(AIOOperation *self, void *closure) {
-    if (self->in_progress && !__atomic_load_n(&self->done, __ATOMIC_ACQUIRE)) {
+    if (
+        CAIO_ATOMIC_LOAD(self->in_progress) &&
+        !CAIO_ATOMIC_LOAD(self->done)
+    ) {
         PyErr_SetString(
             PyExc_RuntimeError,
             "payload is not available while the operation is in flight"
@@ -1009,6 +1048,10 @@ PyMODINIT_FUNC PyInit_thread_aio(void) {
     m = PyModule_Create(&thread_aio_module);
 
     if (m == NULL) return NULL;
+    if (CAIO_DECLARE_FREE_THREADED(m) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
 
     if (PyType_Ready(&AIOContextType) < 0) return NULL;
 
