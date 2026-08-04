@@ -14,9 +14,14 @@ class AsyncioContextBase(abc.ABC):
     CONTEXT_CLASS: ContextType
     OPERATION_CLASS: OperationType
 
-    def __init__(self, max_requests=None, loop=None, **kwargs):
+    def __init__(self, max_requests=None, loop=None, deferred=False, **kwargs):
         max_requests = max_requests or self.MAX_REQUESTS_DEFAULT
         self.loop = loop or asyncio.get_event_loop()
+        # Opt-in: batch multiple submissions into one syscall instead of
+        # flushing/submitting eagerly after each one. Only linux_aio's and
+        # linux_uring's adapters actually act on this (see their own
+        # _submit_op/_on_submitted overrides) - it's a no-op elsewhere.
+        self.deferred = deferred
         self.semaphore = asyncio.BoundedSemaphore(max_requests)
         self.context = self._create_context(max_requests, **kwargs)
 
@@ -43,9 +48,7 @@ class AsyncioContextBase(abc.ABC):
         op.set_callback(partial(self._on_done, future))
 
         async with self.semaphore:
-            if self.context.submit(op) != 1:
-                raise OSError("Operation was not submitted")
-
+            self._submit_op(op, future)
             self._on_submitted()
 
             try:
@@ -57,6 +60,13 @@ class AsyncioContextBase(abc.ABC):
                     pass
                 raise
             return op.get_value()
+
+    def _submit_op(self, op, future):
+        """Default: submit immediately and raise on rejection right away.
+        Subclasses may defer submission (batching) - in that case they must
+        resolve `future` with an exception instead if it's later rejected."""
+        if self.context.submit(op) != 1:
+            raise OSError("Operation was not submitted")
 
     def _on_submitted(self):
         """Hook called after each op is placed in the context's queue.

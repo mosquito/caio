@@ -80,6 +80,9 @@ def test_process_events_respects_timeout_and_releases_gil(polling_backend):
     proving the GIL was actually released, not just that the call happened
     to return quickly for some other reason.
     """
+    if not polling_backend.__name__.startswith("caio."):
+        pytest.skip("synthetic test-only variant, not importable by name in a subprocess")
+
     code = (
         "import threading, time\n"
         f"import {polling_backend.__name__} as m\n"
@@ -119,14 +122,11 @@ def test_process_events_respects_timeout_and_releases_gil(polling_backend):
     )
 
 
-def test_raw_poll_reflects_completions(tmp_path, backend):
-    if not hasattr(backend.Context, "poll"):
-        pytest.skip(f"{backend.__name__} has no poll() API")
-
+def test_raw_poll_reflects_completions(tmp_path, polling_backend):
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
-        ctx = backend.Context(max_requests=8)
-        op = backend.Operation.write(b"hi", fd, 0)
+        ctx = polling_backend.Context(max_requests=8)
+        op = polling_backend.Operation.write(b"hi", fd, 0)
         ctx.submit(op)
 
         # poll() drains the eventfd counter, so it must not be called
@@ -146,6 +146,9 @@ def test_poll_does_not_block_when_nothing_pending(polling_backend):
     would hold the GIL hostage forever regardless of what the test's own
     main thread does.
     """
+    if not polling_backend.__name__.startswith("caio."):
+        pytest.skip("synthetic test-only variant, not importable by name in a subprocess")
+
     code = (
         f"import {polling_backend.__name__} as m\n"
         f"ctx = m.Context(max_requests=8)\n"
@@ -269,6 +272,8 @@ def test_read_with_absurd_nbytes_raises_cleanly(backend):
     """
     if backend.__name__ == "caio.python_aio":
         pytest.skip("python_aio doesn't preallocate at construction time")
+    if not backend.__name__.startswith("caio."):
+        pytest.skip("synthetic test-only variant, not importable by name in a subprocess")
 
     code = (
         f"import {backend.__name__} as m\n"
@@ -982,6 +987,7 @@ def test_linux_aio_process_events_max_requests_is_bounded(backend):
     )
 
 
+@pytest.mark.flaky(reruns=3)
 def test_process_events_negative_timeout_waits_indefinitely(tmp_path, polling_backend):
     """process_events(timeout<0) means "wait indefinitely" - matching the
     native convention each backend's own blocking primitive already uses

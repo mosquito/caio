@@ -38,6 +38,7 @@ develop = [
   "coveralls",
   "pytest",
   "pytest-cov",
+  "pytest-rerunfailures",
   "setuptools",
 ]
 

@@ -3,6 +3,10 @@ from typing import Any
 
 from .abstract import AbstractContext, AbstractOperation
 
+# True if this kernel/process can actually negotiate IORING_SETUP_SQPOLL -
+# probed once at import time (see linux_uring.c's PyInit_linux_uring).
+SQPOLL_ALLOWED: bool
+
 # noinspection PyPropertyDefinition
 class Context(AbstractContext):
     def __init__(self, max_requests: int = 32, sqpoll: bool = False): ...

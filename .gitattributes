@@ -1,0 +1,2 @@
+benchmark/*.png filter=lfs diff=lfs merge=lfs -text
+benchmark/results/bench_all.csv.gz filter=lfs diff=lfs merge=lfs -text
