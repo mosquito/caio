@@ -27,7 +27,7 @@ def test_importing_caio_does_not_enable_gil():
     )
 
 
-def test_high_concurrency_stress_no_data_races(tmp_path):
+def test_high_concurrency_stress_no_data_races(tmp_path, submit_and_wait):
     """Hammers python_aio's own bookkeeping (the _lock-protected
     _in_progress counter and per-operation in_progress flag) with many
     concurrent writes then reads dispatched across a real multi-worker
@@ -47,56 +47,30 @@ def test_high_concurrency_stress_no_data_races(tmp_path):
         ctx = python_aio.Context(max_requests=count, pool_size=32)
         expected = [bytes([i % 256]) * chunk for i in range(count)]
 
-        written = [None] * count
-        lock = threading.Lock()
-        remaining = [count]
-        done = threading.Event()
-
-        def make_write_cb(i):
-            def cb(n):
-                with lock:
-                    written[i] = n
-                    remaining[0] -= 1
-                    if remaining[0] == 0:
-                        done.set()
-            return cb
-
-        for i in range(count):
-            op = python_aio.Operation.write(expected[i], fd, i * chunk)
-            op.set_callback(make_write_cb(i))
-            assert ctx.submit(op) == 1
-
-        assert done.wait(10), f"only {count - remaining[0]}/{count} writes completed"
+        writes = (
+            python_aio.Operation.write(payload, fd, index * chunk)
+            for index, payload in enumerate(expected)
+        )
+        written = submit_and_wait(ctx, writes)
         assert written == [chunk] * count
 
-        read_back = [None] * count
-        remaining = [count]
-        done = threading.Event()
-
-        def make_read_cb(i, op):
-            def cb(_n):
-                with lock:
-                    read_back[i] = op.get_value()
-                    remaining[0] -= 1
-                    if remaining[0] == 0:
-                        done.set()
-            return cb
-
-        for i in range(count):
-            op = python_aio.Operation.read(chunk, fd, i * chunk)
-            op.set_callback(make_read_cb(i, op))
-            assert ctx.submit(op) == 1
-
-        assert done.wait(10), f"only {count - remaining[0]}/{count} reads completed"
-        for i, (got, want) in enumerate(zip(read_back, expected)):
-            assert got == want, f"chunk {i} mismatch"
+        reads = (
+            python_aio.Operation.read(chunk, fd, index * chunk)
+            for index in range(count)
+        )
+        read_back = submit_and_wait(
+            ctx,
+            reads,
+            result_for=lambda operation, _result: operation.get_value(),
+        )
+        assert read_back == expected
     finally:
         os.close(fd)
         if ctx is not None:
             ctx.close()
 
 
-def test_same_operation_is_claimed_once_across_contexts():
+def test_same_operation_is_claimed_once_across_contexts(workers):
     """An Operation's one-shot claim must be synchronized by the Operation.
 
     Context._execute() currently protects ``operation.in_progress`` with the
@@ -115,31 +89,19 @@ def test_same_operation_is_claimed_once_across_contexts():
         python_aio.Context(max_requests=iterations * 2),
         python_aio.Context(max_requests=iterations * 2),
     )
-    start = threading.Barrier(3, timeout=30)
-    finished = threading.Barrier(3, timeout=30)
+    start = workers.barrier(3)
+    finished = workers.barrier(3)
     current = [None]
     submitted = [0, 0]
-    errors = []
 
     def submitter(index, context):
-        try:
-            for _ in range(iterations):
-                start.wait()
-                submitted[index] += context.submit(current[0])
-                finished.wait()
-        except Exception as exc:  # noqa: BLE001 (surface child-thread failures)
-            errors.append(exc)
-            start.abort()
-            finished.abort()
-
-    threads = [
-        threading.Thread(target=submitter, args=(index, context))
-        for index, context in enumerate(contexts)
-    ]
+        for _ in range(iterations):
+            start.wait()
+            submitted[index] += context.submit(current[0])
+            finished.wait()
 
     try:
-        for thread in threads:
-            thread.start()
+        workers.start_many(submitter, enumerate(contexts))
 
         for _ in range(iterations):
             current[0] = python_aio.Operation(
@@ -148,18 +110,12 @@ def test_same_operation_is_claimed_once_across_contexts():
             start.wait()
             finished.wait()
 
-        for thread in threads:
-            thread.join()
-
-        assert not errors
+        workers.join()
         assert sum(submitted) == iterations, (
             f"{sum(submitted) - iterations} Operations were submitted twice"
         )
     finally:
-        start.abort()
-        finished.abort()
-        for thread in threads:
-            thread.join(timeout=5)
+        workers.close()
         for context in contexts:
             context.close()
             context.pool.join()
@@ -295,6 +251,7 @@ def test_same_operation_is_claimed_once_across_contexts_all_backends(
     backend,
     ft_claimant_count,
     ft_claim_operation_count,
+    workers,
 ):
     """Every backend must synchronize a one-shot claim on the Operation.
 
@@ -312,39 +269,25 @@ def test_same_operation_is_claimed_once_across_contexts_all_backends(
         backend.Context(max_requests=claim_window)
         for _ in range(ft_claimant_count)
     )
-    start = threading.Barrier(ft_claimant_count + 1, timeout=30)
-    finished = threading.Barrier(ft_claimant_count + 1, timeout=30)
+    start = workers.barrier(ft_claimant_count + 1)
+    finished = workers.barrier(ft_claimant_count + 1)
     current = [None]
     submitted = [0] * ft_claimant_count
     callback_count = [0]
     callback_lock = threading.Lock()
-    errors = []
-    errors_lock = threading.Lock()
 
     def on_done(_result):
         with callback_lock:
             callback_count[0] += 1
 
     def submitter(index, context):
-        try:
-            for _ in range(iterations):
-                start.wait()
-                submitted[index] += context.submit(current[0])
-                finished.wait()
-        except Exception as exc:  # noqa: BLE001 (surface child-thread failures)
-            with errors_lock:
-                errors.append(exc)
-            start.abort()
-            finished.abort()
-
-    threads = [
-        threading.Thread(target=submitter, args=(index, context))
-        for index, context in enumerate(contexts)
-    ]
+        for _ in range(iterations):
+            start.wait()
+            submitted[index] += context.submit(current[0])
+            finished.wait()
 
     try:
-        for thread in threads:
-            thread.start()
+        workers.start_many(submitter, enumerate(contexts))
 
         for iteration in range(iterations):
             operation = backend.Operation.write(b"x", fd, 0)
@@ -365,10 +308,7 @@ def test_same_operation_is_claimed_once_across_contexts_all_backends(
                     timeout=20,
                 )
 
-        for thread in threads:
-            thread.join()
-
-        assert not errors
+        workers.join()
         accepted = sum(submitted)
 
         def all_callbacks_finished():
@@ -385,10 +325,7 @@ def test_same_operation_is_claimed_once_across_contexts_all_backends(
         )
         assert callback_count[0] == iterations
     finally:
-        start.abort()
-        finished.abort()
-        for thread in threads:
-            thread.join(timeout=5)
+        workers.close()
         _close_contexts(contexts)
         os.close(fd)
 
@@ -399,6 +336,7 @@ def test_concurrent_submits_to_one_context_all_backends(
     ft_submitter_count,
     ft_operations_per_submit,
     ft_submit_rounds,
+    workers,
 ):
     """Distinct Operations submitted concurrently must not corrupt Context."""
     _require_gil_disabled()
@@ -411,13 +349,11 @@ def test_concurrent_submits_to_one_context_all_backends(
     path = tmp_path / "one-context-submit.bin"
     fd = os.open(path, os.O_RDWR | os.O_CREAT | _O_BINARY, 0o600)
     context = backend.Context(max_requests=total)
-    submit_start = threading.Barrier(worker_count, timeout=30)
+    submit_start = workers.barrier(worker_count)
     operations = []
     callback_results = [None] * total
     callback_lock = threading.Lock()
     submitted = [0] * worker_count
-    errors = []
-    errors_lock = threading.Lock()
 
     def make_callback(index, operation):
         def callback(result):
@@ -433,37 +369,26 @@ def test_concurrent_submits_to_one_context_all_backends(
 
     def submitter(worker_index):
         first = worker_index * operations_per_worker_total
-        try:
-            accepted = 0
-            for round_index in range(submit_rounds):
-                batch_first = first + round_index * operations_per_worker
-                batch_last = batch_first + operations_per_worker
-                # Every round stages a batch after the same barrier. Multiple
-                # rounds vary scheduling and repeatedly collide inside the
-                # Context's SQ-tail read/write window.
-                submit_start.wait()
-                accepted += context.submit(
-                    *operations[batch_first:batch_last],
-                )
-            submitted[worker_index] = accepted
-        except Exception as exc:  # noqa: BLE001 (surface child-thread failures)
-            with errors_lock:
-                errors.append(exc)
-            submit_start.abort()
-
-    threads = [
-        threading.Thread(target=submitter, args=(index,))
-        for index in range(worker_count)
-    ]
+        accepted = 0
+        for round_index in range(submit_rounds):
+            batch_first = first + round_index * operations_per_worker
+            batch_last = batch_first + operations_per_worker
+            # Every round stages a batch after the same barrier. Multiple
+            # rounds vary scheduling and repeatedly collide inside the
+            # Context's SQ-tail read/write window.
+            submit_start.wait()
+            accepted += context.submit(
+                *operations[batch_first:batch_last],
+            )
+        submitted[worker_index] = accepted
 
     try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=30)
+        workers.start_many(
+            submitter,
+            ((index,) for index in range(worker_count)),
+        )
+        workers.join()
 
-        assert all(not thread.is_alive() for thread in threads)
-        assert not errors
         assert sum(submitted) == total
 
         def all_callbacks_finished():
@@ -484,9 +409,7 @@ def test_concurrent_submits_to_one_context_all_backends(
         expected = b"".join(index.to_bytes(4, "little") for index in range(total))
         assert os.read(fd, len(expected)) == expected
     finally:
-        submit_start.abort()
-        for thread in threads:
-            thread.join(timeout=5)
+        workers.close()
         _close_contexts((context,))
         os.close(fd)
 
@@ -497,6 +420,7 @@ def test_concurrent_process_events_delivers_each_completion_once(
     ft_operation_count,
     ft_drainer_count,
     ft_drain_rounds,
+    workers,
 ):
     """Concurrent drainers must never consume or callback one event twice."""
     _require_gil_disabled()
@@ -509,9 +433,7 @@ def test_concurrent_process_events_delivers_each_completion_once(
     context = polling_backend.Context(max_requests=operation_count)
     callback_counts = [0] * operation_count
     callback_lock = threading.Lock()
-    drain_round = threading.Barrier(drainer_count, timeout=30)
-    errors = []
-    errors_lock = threading.Lock()
+    drain_round = workers.barrier(drainer_count)
 
     def make_callback(index):
         def callback(_result):
@@ -542,33 +464,21 @@ def test_concurrent_process_events_delivers_each_completion_once(
             time.sleep(0.01)
 
     def drain():
-        try:
-            for _ in range(drain_rounds):
-                # Force all drainers to enter every round together. Without
-                # this barrier a fast first thread can consume the whole CQ
-                # before the others even start, accidentally serializing the
-                # test and hiding a duplicate cq_head read/commit.
-                drain_round.wait()
-                context.process_events(
-                    max_requests=operation_count,
-                    min_requests=0,
-                    timeout=0,
-                )
-        except Exception as exc:  # noqa: BLE001 (surface child-thread failures)
-            with errors_lock:
-                errors.append(exc)
-            drain_round.abort()
-
-    threads = [threading.Thread(target=drain) for _ in range(drainer_count)]
+        for _ in range(drain_rounds):
+            # Force all drainers to enter every round together. Without
+            # this barrier a fast first thread can consume the whole CQ
+            # before the others even start, accidentally serializing the
+            # test and hiding a duplicate cq_head read/commit.
+            drain_round.wait()
+            context.process_events(
+                max_requests=operation_count,
+                min_requests=0,
+                timeout=0,
+            )
 
     try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=30)
-
-        assert all(not thread.is_alive() for thread in threads)
-        assert not errors
+        workers.start_many(drain, (() for _ in range(drainer_count)))
+        workers.join()
 
         def all_callbacks_finished():
             with callback_lock:
@@ -580,9 +490,7 @@ def test_concurrent_process_events_delivers_each_completion_once(
         _pump_contexts((context,), all_callbacks_finished, timeout=20)
         assert callback_counts == [1] * operation_count
     finally:
-        drain_round.abort()
-        for thread in threads:
-            thread.join(timeout=5)
+        workers.close()
         os.close(fd)
 
 
@@ -591,6 +499,7 @@ def test_completed_operation_supports_concurrent_readers(
     backend,
     ft_reader_count,
     ft_reads_per_thread,
+    workers,
 ):
     """C backends must safely return owned result references to all threads."""
     _require_gil_disabled()
@@ -609,39 +518,20 @@ def test_completed_operation_supports_concurrent_readers(
 
     reader_count = ft_reader_count
     reads_per_thread = ft_reads_per_thread
-    start = threading.Barrier(reader_count + 1, timeout=30)
-    errors = []
-    errors_lock = threading.Lock()
+    start = workers.barrier(reader_count + 1)
 
     def read_result():
-        try:
-            start.wait()
-            for _ in range(reads_per_thread):
-                if operation.get_value() != payload:
-                    raise AssertionError("concurrent get_value() returned wrong data")
-        except Exception as exc:  # noqa: BLE001 (surface child-thread failures)
-            with errors_lock:
-                errors.append(exc)
-            start.abort()
-
-    threads = [
-        threading.Thread(target=read_result)
-        for _ in range(reader_count)
-    ]
+        start.wait()
+        for _ in range(reads_per_thread):
+            if operation.get_value() != payload:
+                raise AssertionError("concurrent get_value() returned wrong data")
 
     try:
-        for thread in threads:
-            thread.start()
+        workers.start_many(read_result, (() for _ in range(reader_count)))
         start.wait()
-        for thread in threads:
-            thread.join(timeout=30)
-
-        assert all(not thread.is_alive() for thread in threads)
-        assert not errors
+        workers.join()
     finally:
-        start.abort()
-        for thread in threads:
-            thread.join(timeout=5)
+        workers.close()
         _close_contexts((context,))
         os.close(fd)
 
@@ -651,6 +541,7 @@ def test_payload_access_is_safe_while_worker_publishes_completion(
     pooled_backend,
     ft_observer_count,
     ft_completion_count,
+    workers,
 ):
     """Publishing ``done`` must not expose a buffer being cleared concurrently.
 
@@ -705,53 +596,35 @@ def test_payload_access_is_safe_while_worker_publishes_completion(
 
     assert context.submit(*operations) == operation_count
 
-    observer_start = threading.Barrier(observer_count + 1, timeout=30)
-    errors = []
-    errors_lock = threading.Lock()
+    observer_start = workers.barrier(observer_count + 1)
 
     def observe():
-        try:
-            observer_start.wait()
-            while not all_completed.is_set():
-                for operation in operations:
-                    try:
-                        payload = operation.payload
-                        if payload is not None:
-                            bytes(payload)
-                    except RuntimeError:
-                        pass
+        observer_start.wait()
+        while not all_completed.is_set():
+            for operation in operations:
+                try:
+                    payload = operation.payload
+                    if payload is not None:
+                        bytes(payload)
+                except RuntimeError:
+                    pass
 
-                    try:
-                        operation.get_value()
-                    except RuntimeError:
-                        pass
-        except Exception as exc:  # noqa: BLE001 (surface child-thread failures)
-            with errors_lock:
-                errors.append(exc)
-            observer_start.abort()
-
-    observers = [
-        threading.Thread(target=observe)
-        for _ in range(observer_count)
-    ]
+                try:
+                    operation.get_value()
+                except RuntimeError:
+                    pass
 
     try:
-        for observer in observers:
-            observer.start()
+        workers.start_many(observe, (() for _ in range(observer_count)))
         observer_start.wait()
         blocker_release.set()
         assert all_completed.wait(30), "worker did not finish queued operations"
-        for observer in observers:
-            observer.join(timeout=10)
+        workers.join(timeout=10)
 
-        assert all(not observer.is_alive() for observer in observers)
-        assert not errors
         assert completed_count[0] == operation_count
     finally:
         blocker_release.set()
-        observer_start.abort()
-        for observer in observers:
-            observer.join(timeout=5)
+        workers.close()
         _close_contexts((context,))
         os.close(fd)
 
@@ -760,6 +633,7 @@ def test_concurrent_callback_replacement_releases_every_old_callback(
     backend,
     ft_callback_setter_count,
     ft_callback_sets_per_thread,
+    workers,
 ):
     """set_callback must atomically replace and release its owned reference."""
     _require_gil_disabled()
@@ -767,9 +641,7 @@ def test_concurrent_callback_replacement_releases_every_old_callback(
     setter_count = ft_callback_setter_count
     sets_per_thread = ft_callback_sets_per_thread
     operation = backend.Operation.fsync(0)
-    start = threading.Barrier(setter_count + 1, timeout=30)
-    errors = []
-    errors_lock = threading.Lock()
+    start = workers.barrier(setter_count + 1)
 
     class Callback:
         def __call__(self, _result):
@@ -782,30 +654,18 @@ def test_concurrent_callback_replacement_releases_every_old_callback(
     callback_refs = [weakref.ref(callback) for callback in callbacks]
 
     def replace_callbacks(thread_index):
-        try:
-            start.wait()
-            first = thread_index * sets_per_thread
-            for index in range(first, first + sets_per_thread):
-                assert operation.set_callback(callbacks[index]) is True
-        except Exception as exc:  # noqa: BLE001 (surface child-thread failures)
-            with errors_lock:
-                errors.append(exc)
-            start.abort()
-
-    threads = [
-        threading.Thread(target=replace_callbacks, args=(index,))
-        for index in range(setter_count)
-    ]
+        start.wait()
+        first = thread_index * sets_per_thread
+        for index in range(first, first + sets_per_thread):
+            assert operation.set_callback(callbacks[index]) is True
 
     try:
-        for thread in threads:
-            thread.start()
+        workers.start_many(
+            replace_callbacks,
+            ((index,) for index in range(setter_count)),
+        )
         start.wait()
-        for thread in threads:
-            thread.join(timeout=30)
-
-        assert all(not thread.is_alive() for thread in threads)
-        assert not errors
+        workers.join()
 
         # Move the Operation off every callback in the contested set. Each
         # set_callback owns exactly one reference and must release the old
@@ -816,14 +676,13 @@ def test_concurrent_callback_replacement_releases_every_old_callback(
         leaked = sum(ref() is not None for ref in callback_refs)
         assert leaked == 0, f"{leaked} replaced callbacks are still referenced"
     finally:
-        start.abort()
-        for thread in threads:
-            thread.join(timeout=5)
+        workers.close()
 
 
 def test_concurrent_uring_cancel_requests_do_not_corrupt_submission_ring(
     ft_canceller_count,
     ft_cancel_rounds,
+    workers,
 ):
     """cancel and submit share io_uring's SQ tail and must share its lock."""
     _require_gil_disabled()
@@ -860,36 +719,23 @@ def test_concurrent_uring_cancel_requests_do_not_corrupt_submission_ring(
     assert context.submit(*targets) == operation_count
     context.flush()
 
-    start_round = threading.Barrier(canceller_count, timeout=30)
-    errors = []
-    errors_lock = threading.Lock()
+    start_round = workers.barrier(canceller_count)
     cancelled = [0] * canceller_count
 
     def cancel(thread_index):
-        try:
-            for round_index in range(cancel_rounds):
-                start_round.wait()
-                cancelled[thread_index] += context.cancel(
-                    targets[round_index * canceller_count + thread_index],
-                )
-        except Exception as exc:  # noqa: BLE001 (surface child-thread failures)
-            with errors_lock:
-                errors.append(exc)
-            start_round.abort()
-
-    threads = [
-        threading.Thread(target=cancel, args=(index,))
-        for index in range(canceller_count)
-    ]
+        for round_index in range(cancel_rounds):
+            start_round.wait()
+            cancelled[thread_index] += context.cancel(
+                targets[round_index * canceller_count + thread_index],
+            )
 
     try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=30)
+        workers.start_many(
+            cancel,
+            ((index,) for index in range(canceller_count)),
+        )
+        workers.join()
 
-        assert all(not thread.is_alive() for thread in threads)
-        assert not errors
         assert cancelled == [0] * canceller_count
 
         def all_targets_completed():
@@ -899,9 +745,7 @@ def test_concurrent_uring_cancel_requests_do_not_corrupt_submission_ring(
         _pump_contexts((context,), all_targets_completed, timeout=10)
         assert callback_counts == [1] * operation_count
     finally:
-        start_round.abort()
-        for thread in threads:
-            thread.join(timeout=5)
+        workers.close()
         # Release any read whose cancel SQE was lost so Context teardown
         # cannot leave the kernel holding pointers to live Operations.
         try:
