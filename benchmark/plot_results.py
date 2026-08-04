@@ -10,7 +10,8 @@ Produces figures saved to CAIO_RESULTS dir (once per access pattern: rand/seq):
   latency_histograms.png  (rand only)
 
 Usage:
-  CAIO_RESULTS=/tmp/results uv run python plot_results.py
+  CAIO_RESULTS=/tmp/results PLOT_RESULTS=/tmp/results \
+    uv run --with matplotlib --with numpy python plot_results.py
 """
 import csv
 import os
@@ -28,7 +29,12 @@ PLOT_RESULTS_DIR = pathlib.Path(os.environ.get("PLOT_RESULTS", "."))
 RESULTS_DIR = pathlib.Path(os.environ.get("CAIO_RESULTS", "/tmp/results"))
 CSV_PATH    = RESULTS_DIR / "bench_all.csv"
 
-BACKENDS = ["linux_uring", "linux_aio", "thread_aio", "python_aio"]
+BACKENDS = [
+    "linux_uring",
+    "linux_aio",
+    "thread_aio",
+    "python_aio",
+]
 
 OP_COLORS  = {"read": "#3498db", "write": "#e74c3c"}
 OP_MARKERS = {"read": "o", "write": "s"}
@@ -122,6 +128,17 @@ def _chunk_xticks(ax, chunks: List[int]):
     ax.set_xticklabels([fmt_chunk(c) for c in chunks])
 
 
+def _conc_xticks(ax, values: List[int]):
+    """Keep logarithmic concurrency labels readable in wide backend grids."""
+    ticks = values
+    if len(ticks) > 6:
+        ticks = ticks[::2]
+        if ticks[-1] != values[-1]:
+            ticks.append(values[-1])
+    ax.set_xticks(ticks)
+    ax.tick_params(axis="x", labelsize=8)
+
+
 def _available(rows: List[Row]) -> List[str]:
     """Backends that actually appear in the CSV data."""
     present = {r["backend"] for r in rows}
@@ -167,7 +184,7 @@ def plot_conc_throughput(rows: List[Row], access: str = "rand"):
 
         apply_style(ax, "Concurrency", "kops/s", backend, xscale="log")
         ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
-        ax.set_xticks(xs_all)
+        _conc_xticks(ax, xs_all)
         ax.legend(fontsize=8, framealpha=0.7)
 
     fig.tight_layout()
@@ -220,7 +237,7 @@ def plot_conc_latency(rows: List[Row], access: str = "rand"):
                     xscale="log", yscale="log")
         ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
         if pivots:
-            ax.set_xticks(pivots)
+            _conc_xticks(ax, pivots)
         _op_legend(ax)
 
     fig.tight_layout()
