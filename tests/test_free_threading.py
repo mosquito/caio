@@ -88,3 +88,72 @@ def test_high_concurrency_stress_no_data_races(tmp_path):
     finally:
         os.close(fd)
         ctx.close()
+
+
+def test_same_operation_is_claimed_once_across_contexts():
+    """An Operation's one-shot claim must be synchronized by the Operation.
+
+    Context._execute() currently protects ``operation.in_progress`` with the
+    Context's lock.  That only serializes submissions through the *same*
+    Context: two Contexts use two unrelated locks and can both observe False
+    before either stores True when the GIL is disabled.
+
+    Synchronizing each pair of submissions makes the race frequent enough to
+    be a useful regression test without depending on filesystem timing.
+    """
+    if getattr(sys, "_is_gil_enabled", lambda: True)():
+        pytest.skip("requires a free-threaded interpreter with the GIL disabled")
+
+    iterations = 20_000
+    contexts = (
+        python_aio.Context(max_requests=iterations * 2),
+        python_aio.Context(max_requests=iterations * 2),
+    )
+    start = threading.Barrier(3, timeout=30)
+    finished = threading.Barrier(3, timeout=30)
+    current = [None]
+    submitted = [0, 0]
+    errors = []
+
+    def submitter(index, context):
+        try:
+            for _ in range(iterations):
+                start.wait()
+                submitted[index] += context.submit(current[0])
+                finished.wait()
+        except Exception as exc:  # noqa: BLE001 (surface child-thread failures)
+            errors.append(exc)
+            start.abort()
+            finished.abort()
+
+    threads = [
+        threading.Thread(target=submitter, args=(index, context))
+        for index, context in enumerate(contexts)
+    ]
+
+    try:
+        for thread in threads:
+            thread.start()
+
+        for _ in range(iterations):
+            current[0] = python_aio.Operation(
+                0, None, None, python_aio.OpCode.NOOP,
+            )
+            start.wait()
+            finished.wait()
+
+        for thread in threads:
+            thread.join()
+
+        assert not errors
+        assert sum(submitted) == iterations, (
+            f"{sum(submitted) - iterations} Operations were submitted twice"
+        )
+    finally:
+        start.abort()
+        finished.abort()
+        for thread in threads:
+            thread.join(timeout=5)
+        for context in contexts:
+            context.close()
+            context.pool.join()

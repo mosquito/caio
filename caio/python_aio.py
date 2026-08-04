@@ -107,7 +107,7 @@ class Context(AbstractContext):
         """
         with self._lock:
             self._in_progress -= 1
-            operation.in_progress = False
+        operation._unclaim()
 
     def _execute(self, operation: "Operation") -> bool:
         """
@@ -133,25 +133,25 @@ class Context(AbstractContext):
             operation.written = result
             self._invoke_callback(operation, result)
 
-        # operation.in_progress is checked and set under the same lock as
-        # the capacity check/reservation - otherwise two concurrent
-        # submits of the very same Operation (or the same object appearing
-        # twice in one submit(op, op) call) could both see it unset and
-        # both dispatch, running the I/O twice against one result object.
-        with self._lock:
-            if operation.in_progress:
-                return False
+        # The claim itself is synchronized by the Operation's own lock, not
+        # this Context's - two different Contexts submitting the same
+        # Operation only ever share the Operation, never a Context, so a
+        # per-Context lock here can't stop them both from claiming it.
+        if not operation._claim():
+            return False
 
+        with self._lock:
             if self._state != ContextState.OPEN:
+                operation._unclaim()
                 raise RuntimeError("Context is closed")
 
             if self._in_progress >= self.__max_requests:
+                operation._unclaim()
                 raise RuntimeError(
                     "Maximum simultaneous requests have been reached",
                 )
 
             self._in_progress += 1
-            operation.in_progress = True
 
         try:
             self.pool.apply_async(
@@ -305,6 +305,7 @@ class Operation(AbstractOperation):
 
         self.callback: Callable[[int], Any] | None = None
         self.in_progress = False
+        self._lock = Lock()
         self.buffer: bytes = buffer
 
         self.opcode = opcode
@@ -315,6 +316,20 @@ class Operation(AbstractOperation):
         self.__priority = priority or 0
         self.exception = None
         self.written = 0
+
+    def _claim(self) -> bool:
+        """Atomically claims this Operation for execution - False if some
+        Context (this one or another) already claimed it first."""
+        with self._lock:
+            if self.in_progress:
+                return False
+            self.in_progress = True
+            return True
+
+    def _unclaim(self) -> None:
+        """Reverts a claim that never actually got scheduled."""
+        with self._lock:
+            self.in_progress = False
 
     @classmethod
     def read(
