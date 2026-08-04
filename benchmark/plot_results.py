@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-Plot caio benchmark results from bench_all.csv.
+Plot and compare caio benchmark results with and without the GIL.
 
 Produces figures saved to CAIO_RESULTS dir (once per access pattern: rand/seq):
   concurrency_sweep_throughput_{rand,seq}.png
@@ -10,24 +9,42 @@ Produces figures saved to CAIO_RESULTS dir (once per access pattern: rand/seq):
   latency_histograms.png  (rand only)
 
 Usage:
-  CAIO_RESULTS=/tmp/results PLOT_RESULTS=/tmp/results \
+  CAIO_RESULTS_GIL=/tmp/results-gil \
+  CAIO_RESULTS_NOGIL=/tmp/results-nogil \
+  PLOT_RESULTS=/tmp/results \
     uv run --with matplotlib --with numpy python plot_results.py
 """
 import csv
+import gzip
 import os
 import pathlib
 from collections import defaultdict
-from typing import Any, DefaultDict, Dict, List
+from typing import Any
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import numpy as np
+from matplotlib import ticker
+from PIL import Image
 
-PLOT_RESULTS_DIR = pathlib.Path(os.environ.get("PLOT_RESULTS", "."))
-RESULTS_DIR = pathlib.Path(os.environ.get("CAIO_RESULTS", "/tmp/results"))
-CSV_PATH    = RESULTS_DIR / "bench_all.csv"
+SCRIPT_DIR = pathlib.Path(__file__).parent
+RESULTS_DIR = SCRIPT_DIR / "results"
+PLOT_RESULTS_DIR = pathlib.Path(os.environ.get("PLOT_RESULTS", RESULTS_DIR))
+CSV_GIL_PATH = (
+    pathlib.Path(os.environ["CAIO_RESULTS_GIL"]) / "bench_all.csv"
+    if "CAIO_RESULTS_GIL" in os.environ
+    else RESULTS_DIR / "bench_all.csv.gz"
+)
+CSV_NOGIL_PATH = (
+    pathlib.Path(os.environ["CAIO_RESULTS_NOGIL"]) / "bench_all.csv"
+    if "CAIO_RESULTS_NOGIL" in os.environ
+    else RESULTS_DIR / "bench_all_nogil.csv.gz"
+)
+
+OUTPUT_SUFFIX = ""
+MODE_LABEL = ""
 
 BACKENDS = [
     "linux_uring",
@@ -43,33 +60,36 @@ OP_MARKERS = {"read": "o", "write": "s"}
 
 # ── data loading ──────────────────────────────────────────────────────────────
 
-Row = Dict[str, str]
+Row = dict[str, str]
 
-def load_csv() -> List[Row]:
-    with open(CSV_PATH) as f:
-        return list(csv.DictReader(f))
+def load_csv(path: pathlib.Path) -> list[Row]:
+    if path.suffix == ".gz":
+        with gzip.open(path, mode="rt", newline="") as fp:
+            return list(csv.DictReader(fp))
+    with path.open(mode="r", newline="") as fp:
+        return list(csv.DictReader(fp))
 
 
-def pct(values: List[float], p: float) -> float:
+def pct(values: list[float], p: float) -> float:
     s = sorted(values)
     return s[min(int(len(s) * p), len(s) - 1)]
 
 
-CellData = Dict[str, Any]  # keys: lats (List[float]), wall_s (float), n_ops (int)
+CellData = dict[str, Any]  # keys: lats (List[float]), wall_s (float), n_ops (int)
 
 
 def group(
-    rows: List[Row],
+    rows: list[Row],
     sweep: str,
     op: str,
-) -> DefaultDict[str, DefaultDict[int, CellData]]:
+) -> defaultdict[str, defaultdict[int, CellData]]:
     """Returns {backend: {pivot_value: {lats: [...], wall_s: float, n_ops: int}}}.
 
     `sweep` is the full sweep tag, e.g. 'conc_sweep_rand' or 'chunk_sweep_seq'.
     The pivot key is concurrency for conc sweeps, chunk_bytes for chunk sweeps.
     """
     is_conc = sweep.startswith("conc_sweep")
-    result: DefaultDict[str, DefaultDict[int, CellData]] = defaultdict(
+    result: defaultdict[str, defaultdict[int, CellData]] = defaultdict(
         lambda: defaultdict(lambda: {"lats": [], "wall_s": 0.0, "n_ops": 0}),
     )
     for r in rows:
@@ -101,6 +121,71 @@ def apply_style(ax, xlabel: str, ylabel: str, title: str,
     ax.spines["right"].set_visible(False)
 
 
+def _mode_title(title: str) -> str:
+    if not MODE_LABEL:
+        return title
+    return f"{title} — {MODE_LABEL}"
+
+
+def _output_path(name: str) -> pathlib.Path:
+    stem, suffix = os.path.splitext(name)
+    return PLOT_RESULTS_DIR / f"{stem}{OUTPUT_SUFFIX}{suffix}"
+
+
+def _percentile_footer(
+    ax,
+    rows: list[Row],
+    sweep: str,
+    backend: str,
+) -> None:
+    """Compact aggregate latency summary below every subplot."""
+    lines = []
+    for op in ("read", "write"):
+        values = [
+            float(row["latency_us"]) / 1000
+            for row in rows
+            if row["sweep"] == sweep
+            and row["backend"] == backend
+            and row["op"] == op
+            and row.get("latency_us")
+        ]
+        if not values:
+            continue
+        stats = "  ".join(
+            f"p{int(quantile * 100)} {pct(values, quantile):.3f}"
+            for quantile in (0.25, 0.50, 0.95, 0.99)
+        )
+        lines.append(f"{op}: {stats} ms")
+
+    if lines:
+        ax.text(
+            0.5,
+            -0.30,
+            "\n".join(lines),
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=6.2,
+            color="#555555",
+            linespacing=1.35,
+        )
+
+
+def _combine_mode_rows(
+    gil_path: pathlib.Path,
+    nogil_path: pathlib.Path,
+    output_path: pathlib.Path,
+) -> None:
+    """Stack GIL above no-GIL while preserving each row's exact layout."""
+    with Image.open(gil_path) as gil_image, Image.open(nogil_path) as nogil_image:
+        width = max(gil_image.width, nogil_image.width)
+        height = gil_image.height + nogil_image.height
+        combined = Image.new("RGB", (width, height), "white")
+        combined.paste(gil_image.convert("RGB"), (0, 0))
+        combined.paste(nogil_image.convert("RGB"), (0, gil_image.height))
+        combined.save(output_path)
+
+
 def fmt_chunk(b: int) -> str:
     if b >= 1024 * 1024:
         return f"{b // (1024*1024)}M"
@@ -122,13 +207,13 @@ def _op_legend(ax):
     ax.legend(handles=elems, fontsize=7.5, framealpha=0.7)
 
 
-def _chunk_xticks(ax, chunks: List[int]):
+def _chunk_xticks(ax, chunks: list[int]):
     """Set numeric x-positions with human-readable tick labels."""
     ax.set_xticks(range(len(chunks)))
     ax.set_xticklabels([fmt_chunk(c) for c in chunks])
 
 
-def _conc_xticks(ax, values: List[int]):
+def _conc_xticks(ax, values: list[int]):
     """Keep logarithmic concurrency labels readable in wide backend grids."""
     ticks = values
     if len(ticks) > 6:
@@ -139,7 +224,7 @@ def _conc_xticks(ax, values: List[int]):
     ax.tick_params(axis="x", labelsize=8)
 
 
-def _available(rows: List[Row]) -> List[str]:
+def _available(rows: list[Row]) -> list[str]:
     """Backends that actually appear in the CSV data."""
     present = {r["backend"] for r in rows}
     return [b for b in BACKENDS if b in present]
@@ -147,14 +232,19 @@ def _available(rows: List[Row]) -> List[str]:
 
 # ── figure 1: concurrency sweep — throughput ──────────────────────────────────
 
-def plot_conc_throughput(rows: List[Row], access: str = "rand"):
+def plot_conc_throughput(rows: list[Row], access: str = "rand"):
     backends = _available(rows)
     n = len(backends)
     if not n:
         return
     fig, axes = plt.subplots(1, n, figsize=(4.5 * n, 5), sharey=True)
-    fig.suptitle(f"Throughput vs Concurrency  (chunk=16 KB, {access})",
-                 fontsize=13, fontweight="bold")
+    fig.suptitle(
+        _mode_title(
+            f"Throughput vs Concurrency  (chunk=16 KB, {access})",
+        ),
+        fontsize=13,
+        fontweight="bold",
+    )
     sweep = f"conc_sweep_{access}"
     if n == 1:
         axes = [axes]
@@ -186,24 +276,28 @@ def plot_conc_throughput(rows: List[Row], access: str = "rand"):
         ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
         _conc_xticks(ax, xs_all)
         ax.legend(fontsize=8, framealpha=0.7)
+        _percentile_footer(ax, rows, sweep, backend)
 
-    fig.tight_layout()
-    out = PLOT_RESULTS_DIR / f"concurrency_sweep_throughput_{access}.png"
-    fig.savefig(out, dpi=150)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.95), h_pad=3)
+    out = _output_path(f"concurrency_sweep_throughput_{access}.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
     print(f"saved {out}")
     plt.close(fig)
 
 
 # ── figure 2: concurrency sweep — latency ────────────────────────────────────
 
-def plot_conc_latency(rows: List[Row], access: str = "rand"):
+def plot_conc_latency(rows: list[Row], access: str = "rand"):
     backends = _available(rows)
     n = len(backends)
     if not n:
         return
     fig, axes = plt.subplots(1, n, figsize=(4.5 * n, 5), sharey=True)
-    fig.suptitle(f"Latency vs Concurrency  (chunk=16 KB, {access})",
-                 fontsize=13, fontweight="bold")
+    fig.suptitle(
+        _mode_title(f"Latency vs Concurrency  (chunk=16 KB, {access})"),
+        fontsize=13,
+        fontweight="bold",
+    )
     sweep = f"conc_sweep_{access}"
     if n == 1:
         axes = [axes]
@@ -239,24 +333,30 @@ def plot_conc_latency(rows: List[Row], access: str = "rand"):
         if pivots:
             _conc_xticks(ax, pivots)
         _op_legend(ax)
+        _percentile_footer(ax, rows, sweep, backend)
 
-    fig.tight_layout()
-    out = PLOT_RESULTS_DIR / f"concurrency_sweep_latency_{access}.png"
-    fig.savefig(out, dpi=150)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.95), h_pad=3)
+    out = _output_path(f"concurrency_sweep_latency_{access}.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
     print(f"saved {out}")
     plt.close(fig)
 
 
 # ── figure 3: chunk sweep — throughput (MB/s) ─────────────────────────────────
 
-def plot_chunk_throughput(rows: List[Row], access: str = "rand"):
+def plot_chunk_throughput(rows: list[Row], access: str = "rand"):
     backends = _available(rows)
     n = len(backends)
     if not n:
         return
     fig, axes = plt.subplots(1, n, figsize=(4.5 * n, 5), sharey=True)
-    fig.suptitle(f"Throughput vs Chunk Size  (concurrency=64, {access})",
-                 fontsize=13, fontweight="bold")
+    fig.suptitle(
+        _mode_title(
+            f"Throughput vs Chunk Size  (concurrency=64, {access})",
+        ),
+        fontsize=13,
+        fontweight="bold",
+    )
     sweep = f"chunk_sweep_{access}"
     if n == 1:
         axes = [axes]
@@ -288,24 +388,28 @@ def plot_chunk_throughput(rows: List[Row], access: str = "rand"):
         apply_style(ax, "Chunk size", "MB/s", backend)
         _chunk_xticks(ax, chunks)
         ax.legend(fontsize=8, framealpha=0.7)
+        _percentile_footer(ax, rows, sweep, backend)
 
-    fig.tight_layout()
-    out = PLOT_RESULTS_DIR / f"chunk_sweep_throughput_{access}.png"
-    fig.savefig(out, dpi=150)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.95), h_pad=3)
+    out = _output_path(f"chunk_sweep_throughput_{access}.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
     print(f"saved {out}")
     plt.close(fig)
 
 
 # ── figure 4: chunk sweep — latency ──────────────────────────────────────────
 
-def plot_chunk_latency(rows: List[Row], access: str = "rand"):
+def plot_chunk_latency(rows: list[Row], access: str = "rand"):
     backends = _available(rows)
     n = len(backends)
     if not n:
         return
     fig, axes = plt.subplots(1, n, figsize=(4.5 * n, 5), sharey=True)
-    fig.suptitle(f"Latency vs Chunk Size  (concurrency=64, {access})",
-                 fontsize=13, fontweight="bold")
+    fig.suptitle(
+        _mode_title(f"Latency vs Chunk Size  (concurrency=64, {access})"),
+        fontsize=13,
+        fontweight="bold",
+    )
     sweep = f"chunk_sweep_{access}"
     if n == 1:
         axes = [axes]
@@ -338,10 +442,11 @@ def plot_chunk_latency(rows: List[Row], access: str = "rand"):
         apply_style(ax, "Chunk size", "Latency (ms)", backend, yscale="log")
         _chunk_xticks(ax, chunks)
         _op_legend(ax)
+        _percentile_footer(ax, rows, sweep, backend)
 
-    fig.tight_layout()
-    out = PLOT_RESULTS_DIR / f"chunk_sweep_latency_{access}.png"
-    fig.savefig(out, dpi=150)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.95), h_pad=3)
+    out = _output_path(f"chunk_sweep_latency_{access}.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
     print(f"saved {out}")
     plt.close(fig)
 
@@ -351,7 +456,7 @@ def plot_chunk_latency(rows: List[Row], access: str = "rand"):
 _HIST_COLORS = ["#3498db", "#e74c3c", "#2ecc71", "#f39c12", "#9b59b6"]
 
 
-def plot_histograms(rows: List[Row]):
+def plot_histograms(rows: list[Row]):
     """Per-backend histogram of read latency at concurrency=64, chunk=16K."""
     backends = _available(rows)
     if not backends:
@@ -363,7 +468,10 @@ def plot_histograms(rows: List[Row]):
     fig, axes = plt.subplots(nrows, ncols, figsize=(6.5 * ncols, 4.5 * nrows),
                              squeeze=False)
     fig.suptitle(
-        f"Read latency distribution  (concurrency={target_conc}, chunk=16 KB)",
+        _mode_title(
+            f"Read latency distribution  "
+            f"(concurrency={target_conc}, chunk=16 KB)",
+        ),
         fontsize=13, fontweight="bold",
     )
 
@@ -382,9 +490,10 @@ def plot_histograms(rows: List[Row]):
             ax.set_visible(False)
             continue
 
-        p50  = pct(lats, 0.50)
-        p95  = pct(lats, 0.95)
-        p99  = pct(lats, 0.99)
+        p25 = pct(lats, 0.25)
+        p50 = pct(lats, 0.50)
+        p95 = pct(lats, 0.95)
+        p99 = pct(lats, 0.99)
         clip = pct(lats, 0.999)
 
         ax.hist(
@@ -405,33 +514,83 @@ def plot_histograms(rows: List[Row]):
         ax.grid(True, linestyle="--", alpha=0.4)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
+        ax.text(
+            0.5,
+            -0.24,
+            (
+                f"read: p25 {p25:.3f}  p50 {p50:.3f}  "
+                f"p95 {p95:.3f}  p99 {p99:.3f} ms"
+            ),
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=6.5,
+            color="#555555",
+        )
 
     # Hide unused subplot cells
     for idx in range(len(backends), nrows * ncols):
         axes[idx // ncols][idx % ncols].set_visible(False)
 
-    fig.tight_layout()
-    out = PLOT_RESULTS_DIR / "latency_histograms.png"
-    fig.savefig(out, dpi=150)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.95), h_pad=3)
+    out = _output_path("latency_histograms.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
     print(f"saved {out}")
     plt.close(fig)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
-def main():
-    if not CSV_PATH.exists():
-        raise SystemExit(f"CSV not found: {CSV_PATH}\nRun bench_runner.py first.")
-
-    rows = load_csv()
-    print(f"loaded {len(rows):,} rows from {CSV_PATH}")
-
+def _render_mode(rows: list[Row], label: str, suffix: str) -> None:
+    global MODE_LABEL, OUTPUT_SUFFIX
+    MODE_LABEL = label
+    OUTPUT_SUFFIX = suffix
     for access in ("rand", "seq"):
         plot_conc_throughput(rows, access)
         plot_conc_latency(rows, access)
         plot_chunk_throughput(rows, access)
         plot_chunk_latency(rows, access)
     plot_histograms(rows)
+
+
+def main():
+    missing = [
+        path for path in (CSV_GIL_PATH, CSV_NOGIL_PATH)
+        if not path.exists()
+    ]
+    if missing:
+        paths = "\n".join(str(path) for path in missing)
+        raise SystemExit(f"Benchmark CSV not found:\n{paths}")
+
+    PLOT_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    gil_rows = load_csv(CSV_GIL_PATH)
+    nogil_rows = load_csv(CSV_NOGIL_PATH)
+    print(f"loaded {len(gil_rows):,} GIL rows from {CSV_GIL_PATH}")
+    print(f"loaded {len(nogil_rows):,} no-GIL rows from {CSV_NOGIL_PATH}")
+
+    _render_mode(gil_rows, "GIL", "_gil")
+    _render_mode(nogil_rows, "free-threaded / no GIL", "_nogil")
+
+    names = [
+        f"{prefix}_{access}.png"
+        for access in ("rand", "seq")
+        for prefix in (
+            "concurrency_sweep_throughput",
+            "concurrency_sweep_latency",
+            "chunk_sweep_throughput",
+            "chunk_sweep_latency",
+        )
+    ] + ["latency_histograms.png"]
+
+    for name in names:
+        stem, suffix = os.path.splitext(name)
+        gil_path = PLOT_RESULTS_DIR / f"{stem}_gil{suffix}"
+        nogil_path = PLOT_RESULTS_DIR / f"{stem}_nogil{suffix}"
+        output_path = PLOT_RESULTS_DIR / name
+        _combine_mode_rows(gil_path, nogil_path, output_path)
+        gil_path.unlink()
+        nogil_path.unlink()
+        print(f"combined {output_path}")
 
     print(f"\nAll plots saved to {PLOT_RESULTS_DIR.resolve()}")
 
