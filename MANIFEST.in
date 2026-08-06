@@ -1,1 +1,3 @@
 recursive-include caio/src/threadpool *.*
+graft tests
+global-exclude *.py[cod]

@@ -47,7 +47,7 @@ develop = [
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.setuptools.packages.find]
-include = ["caio*", "tests"]
+include = ["caio*"]
 
 [tool.ruff]
 line-length = 80
