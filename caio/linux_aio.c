@@ -257,8 +257,9 @@ static PyObject* AIOContext_repr(AIOContext *self) {
         return NULL;
     }
     return PyUnicode_FromFormat(
-        "<%s as %p: max_requests=%i, ctx=%lli>",
-        Py_TYPE(self)->tp_name, self, self->max_requests, self->ctx
+        "<%s as %p: max_requests=%u, ctx=%llu>",
+        Py_TYPE(self)->tp_name, self, self->max_requests,
+        (unsigned long long) self->ctx
     );
 }
 
@@ -628,7 +629,7 @@ static PyMemberDef AIOContext_members[] = {
     },
     {
         "max_requests",
-        T_USHORT,
+        T_UINT,
         offsetof(AIOContext, max_requests),
         READONLY,
         "max requests"
@@ -744,9 +745,11 @@ static PyObject* AIOOperation_repr(AIOOperation *self) {
     }
 
     return PyUnicode_FromFormat(
-        "<%s at %p: mode=\"%s\", fd=%i, offset=%i, buffer=%p>",
+        "<%s at %p: mode=\"%s\", fd=%u, offset=%lld, buffer=%p>",
         Py_TYPE(self)->tp_name, self, mode,
-        self->iocb.aio_fildes, self->iocb.aio_offset, self->iocb.aio_buf
+        self->iocb.aio_fildes,
+        (long long) self->iocb.aio_offset,
+        (void *)(uintptr_t) self->iocb.aio_buf
     );
 }
 
