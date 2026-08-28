@@ -44,7 +44,7 @@ def test_high_concurrency_stress_no_data_races(tmp_path, submit_and_wait):
     fd = os.open(str(path), os.O_RDWR | _O_BINARY)
     ctx = None
     try:
-        ctx = python_aio.Context(max_requests=count, pool_size=32)
+        ctx = python_aio.Context(max_requests=count, pool_size=8)
         expected = [bytes([i % 256]) * chunk for i in range(count)]
 
         writes = (

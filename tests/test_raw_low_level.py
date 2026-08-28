@@ -455,8 +455,8 @@ def test_uring_context_stays_alive_via_operation_while_genuinely_in_flight(tmp_p
 
     r_fd, w_fd = os.pipe()
     try:
-        fcntl.fcntl(w_fd, F_SETPIPE_SZ, 4096)
-        os.write(w_fd, b"f" * 4096)  # fill the pipe so the next write blocks until drained
+        pipe_size = fcntl.fcntl(w_fd, F_SETPIPE_SZ, 4096)
+        os.write(w_fd, b"f" * pipe_size)  # fill the pipe so the next write blocks until drained
 
         ctx = linux_uring.Context(max_requests=8)
         ctx_ref = weakref.ref(ctx)
@@ -476,7 +476,7 @@ def test_uring_context_stays_alive_via_operation_while_genuinely_in_flight(tmp_p
             "in flight - op.context should have kept it alive"
         )
 
-        os.read(r_fd, 8192)  # unblocks the pending write
+        os.read(r_fd, pipe_size)  # unblocks the pending write
         drain(ctx_ref(), 1, timeout=5.0)
         assert op.get_value() == len(b"pending")
 
@@ -1069,8 +1069,8 @@ def test_uring_process_events_max_requests_bounds_callbacks_not_just_return_valu
     pipes = [os.pipe() for _ in range(5)]
     try:
         for r_fd, w_fd in pipes:
-            fcntl.fcntl(w_fd, F_SETPIPE_SZ, 4096)
-            os.write(w_fd, b"f" * 4096)  # fill each pipe so the next write blocks
+            pipe_size = fcntl.fcntl(w_fd, F_SETPIPE_SZ, 4096)
+            os.write(w_fd, b"f" * pipe_size)  # fill each pipe so the next write blocks
 
         ctx = linux_uring.Context(max_requests=16)
         called = []
@@ -1089,7 +1089,7 @@ def test_uring_process_events_max_requests_bounds_callbacks_not_just_return_valu
         )
 
         for r_fd, _w_fd in pipes:
-            os.read(r_fd, 8192)
+            os.read(r_fd, pipe_size)
         time.sleep(0.05)  # let the kernel actually post the completions
 
         first = ctx.process_events(max_requests=1, min_requests=0, timeout=0)
@@ -1133,8 +1133,8 @@ def test_uring_process_events_min_requests_ignores_cancel_sentinel(tmp_path):
         fd = f.fileno()
         r_fd, w_fd = os.pipe()
         try:
-            fcntl.fcntl(w_fd, F_SETPIPE_SZ, 4096)
-            os.write(w_fd, b"f" * 4096)  # fill the pipe so the next write blocks
+            pipe_size = fcntl.fcntl(w_fd, F_SETPIPE_SZ, 4096)
+            os.write(w_fd, b"f" * pipe_size)  # fill the pipe so the next write blocks
 
             ctx = linux_uring.Context(max_requests=16)
 
@@ -1161,7 +1161,7 @@ def test_uring_process_events_min_requests_ignores_cancel_sentinel(tmp_path):
             def drain_pipe_late():
                 time.sleep(0.2)
                 drained_before_call_returned.set()
-                os.read(r_fd, 8192)
+                os.read(r_fd, pipe_size)
 
             t = threading.Thread(target=drain_pipe_late)
             t.start()
