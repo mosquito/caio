@@ -45,6 +45,12 @@ static const unsigned CTX_MAX_REQUESTS_DEFAULT = 32;
 static const unsigned EV_MAX_REQUESTS_DEFAULT = 512;
 static int kernel_support = -1;
 
+/* Raw io_getevents uses the kernel's two-long timeout layout. */
+struct caio_timespec {
+    long tv_sec;
+    long tv_nsec;
+};
+
 inline static int io_setup(unsigned nr, aio_context_t *ctxp) {
     return syscall(__NR_io_setup, nr, ctxp);
 }
@@ -57,7 +63,7 @@ inline static int io_destroy(aio_context_t ctx) {
 
 inline static int io_getevents(
     aio_context_t ctx, long min_nr, long max_nr,
-    struct io_event *events, struct timespec *timeout
+    struct io_event *events, struct caio_timespec *timeout
 ) {
     return syscall(__NR_io_getevents, ctx, min_nr, max_nr, events, timeout);
 }
@@ -463,7 +469,7 @@ static PyObject* AIOContext_process_events(
     uint32_t min_requests = 0;
     uint32_t max_requests = 0;
     int32_t tv_sec = 0;
-    struct timespec timeout = {0, 0};
+    struct caio_timespec timeout = {0, 0};
 
     static char *kwlist[] = {"max_requests", "min_requests", "timeout", NULL};
 
@@ -477,7 +483,7 @@ static PyObject* AIOContext_process_events(
      * (unlike linux_uring, whose io_uring_enter() has no native timeout
      * parameter at all). timeout=0 is a non-blocking check; timeout>0
      * bounds the wait. */
-    struct timespec *timeout_arg = NULL;
+    struct caio_timespec *timeout_arg = NULL;
     if (tv_sec >= 0) {
         timeout.tv_sec = tv_sec;
         timeout_arg = &timeout;
