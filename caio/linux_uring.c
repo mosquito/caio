@@ -219,6 +219,15 @@ static PyObject *AIOOperation_read(
         return NULL;
     }
 
+    if (nbytes > UINT32_MAX || nbytes > (uint64_t) PY_SSIZE_T_MAX) {
+        Py_DECREF(self);
+        PyErr_SetString(
+            PyExc_OverflowError,
+            "nbytes exceeds the io_uring read limit"
+        );
+        return NULL;
+    }
+
     /* Allocate the result bytes object directly — the kernel writes into
      * its internal buffer, so get_value() can return it with no copy.
      * PyBytes_FromStringAndSize(NULL, n) leaves the memory uninitialized

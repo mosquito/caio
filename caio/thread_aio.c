@@ -637,18 +637,27 @@ static PyObject* AIOOperation_read(
         return NULL;
     }
 
+    if (nbytes > (uint64_t) PY_SSIZE_T_MAX) {
+        Py_DECREF(self);
+        PyErr_SetString(
+            PyExc_OverflowError,
+            "nbytes does not fit in Py_ssize_t"
+        );
+        return NULL;
+    }
+
     // PyMem_Calloc can return NULL for a large enough (or just
     // OOM-at-the-time) nbytes - proceeding with a NULL buf would hand the
     // kernel (via pread() in worker()) and PyMemoryView_FromMemory a NULL
     // pointer with a nonzero declared size, corrupting memory instead of
     // raising a catchable error.
-    self->buf = PyMem_Calloc(nbytes, sizeof(char));
+    self->buf = PyMem_Calloc((size_t) nbytes, sizeof(char));
     if (self->buf == NULL && nbytes > 0) {
         Py_DECREF(self);
         PyErr_NoMemory();
         return NULL;
     }
-    self->buf_size = nbytes;
+    self->buf_size = (Py_ssize_t) nbytes;
 
     self->py_buffer = PyMemoryView_FromMemory(
         self->buf,
@@ -993,7 +1002,7 @@ static PyMemberDef AIOOperation_members[] = {
         READONLY, "offset"
     },
     {
-        "nbytes", T_ULONGLONG,
+        "nbytes", T_PYSSIZET,
         offsetof(AIOOperation, buf_size),
         READONLY, "nbytes"
     },
