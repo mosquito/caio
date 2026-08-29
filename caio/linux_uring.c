@@ -689,8 +689,8 @@ static int AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds) {
      *
      * Opt-in (sqpoll=True): SQPOLL kernel thread polls SQ ring; io_uring_enter
      *   only needed to wake a sleeping thread.  Eliminates per-op syscall
-     *   overhead at sustained high QD.  EPERM on pre-5.11 kernels without
-     *   CAP_SYS_NICE is treated like EINVAL (try next entry).
+     *   overhead at sustained high QD.  Permission errors are treated like
+     *   EINVAL (try next entry), allowing fallback to a plain ring.
      *
      * IORING_SETUP_SINGLE_ISSUER deliberately never tried: it pins the ring
      * to whichever thread's io_uring_setup()/io_uring_enter() call created
@@ -726,7 +726,7 @@ static int AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds) {
             flags_used = params.flags;
             break;
         }
-        if (errno != EINVAL && errno != EPERM) {
+        if (errno != EINVAL && errno != EPERM && errno != EACCES) {
             PyErr_SetFromErrno(PyExc_SystemError);
             return -1;
         }
