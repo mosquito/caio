@@ -1081,8 +1081,6 @@ static PyModuleDef thread_aio_module = {
 
 
 PyMODINIT_FUNC PyInit_thread_aio(void) {
-    Py_Initialize();
-
     PyObject *m;
 
     m = PyModule_Create(&thread_aio_module);
