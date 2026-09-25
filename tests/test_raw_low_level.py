@@ -998,17 +998,26 @@ def test_process_events_negative_timeout_waits_indefinitely(tmp_path, polling_ba
     (not return early or misinterpret negative as "don't wait"), and it
     must actually wake up and return once a real completion satisfies
     min_requests, not stay stuck forever once given something to wait for.
+
+    The waiter may legitimately return 0: linux_uring's flush() drains
+    inline completions itself, and on a single CPU that drain reliably
+    wins the race against the waiter (GitHub #79). The wait must still end
+    - the completion is verified through the operation's own callback, not
+    through the waiter's return value.
     """
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
         ctx = polling_backend.Context(max_requests=8)
 
         result = {}
+        completed = threading.Event()
 
         def wait():
             result["n"] = ctx.process_events(min_requests=1, timeout=-1)
 
-        t = threading.Thread(target=wait)
+        # daemon: a waiter that never wakes up must fail this test, not
+        # hang interpreter shutdown afterwards.
+        t = threading.Thread(target=wait, daemon=True)
         t.start()
         try:
             t.join(timeout=0.3)
@@ -1019,6 +1028,7 @@ def test_process_events_negative_timeout_waits_indefinitely(tmp_path, polling_ba
             )
 
             op = polling_backend.Operation.write(b"x" * 4, fd, 0)
+            op.set_callback(lambda _r: completed.set())
             ctx.submit(op)
             if hasattr(ctx, "flush"):
                 ctx.flush()
@@ -1031,7 +1041,8 @@ def test_process_events_negative_timeout_waits_indefinitely(tmp_path, polling_ba
         finally:
             t.join(timeout=5.0)
 
-        assert result.get("n", 0) >= 1
+        assert completed.wait(timeout=5.0), "the write never completed"
+        assert result["n"] in (0, 1), result
 
 
 def test_uring_process_events_max_requests_bounds_callbacks_not_just_return_value(tmp_path):

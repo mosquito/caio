@@ -5,6 +5,7 @@ the cross-backend parametrized suite. Skipped outright wherever thread_aio
 itself isn't available.
 """
 import threading
+import time
 
 import pytest
 
@@ -28,6 +29,12 @@ def test_queue_overflow_allows_retry_with_original_data(tmp_path):
     most one op can ever be raced away like that, making the LAST op in a
     5-op batch guaranteed to overflow regardless of exactly how that race
     resolves for the first one.
+
+    The raced-away first op means a second op can sit in the one-slot
+    queue when the first op's callback fires, so the resubmit below can
+    still hit a full queue for a moment - reliably so on a single CPU
+    (GitHub #79). Retry until it is accepted: the contract under test is
+    "not permanently stuck", not "accepted on the first try".
     """
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
@@ -52,7 +59,15 @@ def test_queue_overflow_allows_retry_with_original_data(tmp_path):
 
         done = threading.Event()
         rejected.set_callback(lambda _r: done.set())
-        resubmitted = ctx.submit(rejected)
+        deadline = time.monotonic() + 30.0
+        while True:
+            try:
+                resubmitted = ctx.submit(rejected)
+            except RuntimeError:
+                assert time.monotonic() < deadline, "queue never drained for the retry"
+                time.sleep(0.001)
+            else:
+                break
         assert resubmitted == 1, "a queue-rejected operation must not be permanently stuck"
         assert done.wait(timeout=30.0), "retried operation must actually run"
         assert rejected.result == len(payload), f"expected a full write, got result={rejected.result}"
