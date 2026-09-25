@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp314-cp314t]
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp314-cp314t, cp315-cp315, cp315-cp315t]
     steps:
       - uses: actions/checkout@v4
       - name: Set version from release tag
@@ -63,7 +63,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp314-cp314t]
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp314-cp314t, cp315-cp315, cp315-cp315t]
     steps:
       - uses: actions/checkout@v4
       - name: Set version from release tag
@@ -90,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp314-cp314t]
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp314-cp314t, cp315-cp315, cp315-cp315t]
     steps:
       - uses: actions/checkout@v4
       - name: Set version from release tag
@@ -128,7 +128,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp314-cp314t]
+        python: [cp310-cp310, cp311-cp311, cp312-cp312, cp313-cp313, cp314-cp314, cp314-cp314t, cp315-cp315, cp315-cp315t]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -159,7 +159,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.13t", "3.14t"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15", "3.13t", "3.14t", "3.15t"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
