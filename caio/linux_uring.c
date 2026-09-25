@@ -600,6 +600,12 @@ typedef struct {
     uint8_t  no_sqarray;   /* IORING_SETUP_NO_SQARRAY was used */
     uint8_t  sqpoll;       /* IORING_SETUP_SQPOLL was used */
 
+    /* Total CQEs retired by uring_drain_cq() over the Context lifetime.
+     * A blocking process_events() compares it with the value at entry, so
+     * a completion that flush() or another thread drained first still
+     * ends the wait instead of leaving it blocked on the eventfd. */
+    uint64_t cq_consumed;
+
     PyObject *weakreflist;
 } AIOContext;
 
@@ -636,6 +642,7 @@ static PyObject *AIOContext_new(PyTypeObject *type, PyObject *args, PyObject *kw
         self->sqes        = MAP_FAILED;
         self->no_sqarray  = 0;
         self->sqpoll      = 0;
+        self->cq_consumed = 0;
     }
     return (PyObject *) self;
 }
@@ -861,6 +868,7 @@ static int uring_drain_cq(AIOContext *self, uint32_t max) {
     uint32_t head = __atomic_load_n(self->cq_head, __ATOMIC_RELAXED);
     uint32_t tail = __atomic_load_n(self->cq_tail, __ATOMIC_ACQUIRE);
     uint32_t mask = *self->cq_ring_mask;
+    uint32_t start_head = head;
 
     uint32_t avail = tail - head;
     uint32_t cap = avail < max ? avail : max;
@@ -911,6 +919,7 @@ static int uring_drain_cq(AIOContext *self, uint32_t max) {
 
     /* Ring state fully committed - reentrant callers now see this whole
      * batch as already consumed, before a single callback has run. */
+    __atomic_add_fetch(&self->cq_consumed, head - start_head, __ATOMIC_RELEASE);
     __atomic_store_n(self->cq_head, head, __ATOMIC_RELEASE);
     CAIO_END_CRITICAL_SECTION();
 
@@ -1184,8 +1193,33 @@ PyDoc_STRVAR(AIOContext_process_events_docstring,
     "    indefinitely. Both are for manual synchronous polling from a plain\n"
     "    thread - do not also select()/poll() on `.fileno` from elsewhere\n"
     "    while relying on this to wait, the two waiting mechanisms are\n"
-    "    alternatives, not meant to be combined on the same Context."
+    "    alternatives, not meant to be combined on the same Context.\n"
+    "    The wait ends when min_requests completions occurred, even if a\n"
+    "    concurrent flush() or process_events() already collected them -\n"
+    "    the return value then counts only what this call collected, so\n"
+    "    it can be lower than min_requests, including 0."
 );
+/*
+ * Return nonzero when at least min_requests CQEs became available since a
+ * blocking process_events() started to wait. Count the CQEs still in the
+ * ring plus the CQEs that some drain (flush() in another thread, a
+ * reentrant process_events()) retired after `consumed_at_entry`. A wait
+ * that only watched the ring could miss a completion twice: it wakes,
+ * finds the ring already empty, and blocks again on an eventfd counter
+ * that it drained itself - or it sees the CQE, loses the GIL race to
+ * flush()'s own drain, and returns 0 without any signal that the
+ * completion happened. Both showed up deterministically on a single CPU.
+ */
+static inline int uring_wait_satisfied(
+    AIOContext *self, uint32_t min_requests, uint64_t consumed_at_entry
+) {
+    uint32_t head = __atomic_load_n(self->cq_head, __ATOMIC_RELAXED);
+    uint32_t tail = __atomic_load_n(self->cq_tail, __ATOMIC_ACQUIRE);
+    uint64_t consumed = __atomic_load_n(&self->cq_consumed, __ATOMIC_ACQUIRE);
+    uint64_t seen = (uint64_t) (tail - head) + (consumed - consumed_at_entry);
+    return seen >= min_requests;
+}
+
 static PyObject *AIOContext_process_events(
     AIOContext *self, PyObject *args, PyObject *kwds
 ) {
@@ -1241,11 +1275,11 @@ static PyObject *AIOContext_process_events(
         }
 
         int saved_errno = 0;
+        uint64_t consumed_at_entry =
+            __atomic_load_n(&self->cq_consumed, __ATOMIC_ACQUIRE);
         Py_BEGIN_ALLOW_THREADS
         for (;;) {
-            uint32_t head = __atomic_load_n(self->cq_head, __ATOMIC_RELAXED);
-            uint32_t tail = __atomic_load_n(self->cq_tail, __ATOMIC_ACQUIRE);
-            if (tail - head >= min_requests)
+            if (uring_wait_satisfied(self, min_requests, consumed_at_entry))
                 break;
 
             int ret = io_uring_enter(
@@ -1256,9 +1290,7 @@ static PyObject *AIOContext_process_events(
                 break;
             }
 
-            head = __atomic_load_n(self->cq_head, __ATOMIC_RELAXED);
-            tail = __atomic_load_n(self->cq_tail, __ATOMIC_ACQUIRE);
-            if (tail - head >= min_requests)
+            if (uring_wait_satisfied(self, min_requests, consumed_at_entry))
                 break;
 
             int poll_timeout_ms = -1;   /* poll()'s own "block indefinitely" */
