@@ -83,15 +83,19 @@ jobs:
         run: uv run pytest --cov=caio --cov-report=term-missing -sv tests
         env:
           FORCE_COLOR: 1
-          COVERALLS_PARALLEL: 'true'
-          COVERALLS_SERVICE_NAME: github
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHON_GIL: ${{ matrix.free_threaded && '0' || '' }}
+      # Each matrix job uploads one part of a parallel build. Coveralls
+      # closes the build and posts the PR status only in the `finish` job
+      # below, after every part arrived. The client reads these variables
+      # in its own step, not in the pytest step.
       - name: Report coverage
         run: uv run coveralls
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COVERALLS_SERVICE_NAME: github
+          COVERALLS_PARALLEL: 'true'
+          COVERALLS_FLAG_NAME: ${{ matrix.os }}-${{ matrix.python }}
 
   # Builds normally under a regular interpreter, then runs the suite through
   # a free-threaded one of the same X.Y against that same install. The
@@ -121,13 +125,16 @@ jobs:
         env:
           FORCE_COLOR: 1
 
+  # Closes the parallel Coveralls build. `if: always()` keeps the build from
+  # staying open forever when one matrix job fails.
   finish:
     needs:
       - tests
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Coveralls Finished
         uses: coverallsapp/github-action@v2
         with:
-          github-token: ${{ secrets.github_token }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           parallel-finished: true
