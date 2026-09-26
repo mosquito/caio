@@ -47,7 +47,7 @@ typedef struct {
     PyObject_HEAD
     threadpool_t* pool;
     uint16_t max_requests;
-    uint8_t pool_size;
+    uint16_t pool_size;
     PyObject* weakreflist;
 } AIOContext;
 
@@ -153,6 +153,7 @@ AIOContext_init(AIOContext *self, PyObject *args, PyObject *kwds)
 
     self->pool = NULL;
     self->max_requests = 0;
+    self->pool_size = 0;
 
     if (!PyArg_ParseTupleAndKeywords(
             args, kwds, "|HH", kwlist,
@@ -205,9 +206,9 @@ static PyObject* AIOContext_repr(AIOContext *self) {
         return NULL;
     }
     return PyUnicode_FromFormat(
-        "<%s as %p: max_requests=%i, pool_size=%i, ctx=%lli>",
+        "<%s as %p: max_requests=%u, pool_size=%u, ctx=%p>",
         Py_TYPE(self)->tp_name, self, self->max_requests,
-        self->pool_size, self->pool
+        self->pool_size, (void *) self->pool
     );
 }
 
@@ -456,7 +457,7 @@ static PyObject* AIOContext_close(
 static PyMemberDef AIOContext_members[] = {
     {
         "pool_size",
-        T_INT,
+        T_USHORT,
         offsetof(AIOContext, pool_size),
         READONLY,
         "pool_size"
@@ -581,9 +582,9 @@ static PyObject* AIOOperation_repr(AIOOperation *self) {
     }
 
     return PyUnicode_FromFormat(
-        "<%s at %p: mode=\"%s\", fd=%i, offset=%i, result=%i, buffer=%p>",
+        "<%s at %p: mode=\"%s\", fd=%u, offset=%lld, result=%d, buffer=%p>",
         Py_TYPE(self)->tp_name, self, mode,
-        self->fileno, self->offset, self->result, self->buf
+        self->fileno, (long long) self->offset, self->result, self->buf
     );
 }
 
@@ -636,18 +637,27 @@ static PyObject* AIOOperation_read(
         return NULL;
     }
 
+    if (nbytes > (uint64_t) PY_SSIZE_T_MAX) {
+        Py_DECREF(self);
+        PyErr_SetString(
+            PyExc_OverflowError,
+            "nbytes does not fit in Py_ssize_t"
+        );
+        return NULL;
+    }
+
     // PyMem_Calloc can return NULL for a large enough (or just
     // OOM-at-the-time) nbytes - proceeding with a NULL buf would hand the
     // kernel (via pread() in worker()) and PyMemoryView_FromMemory a NULL
     // pointer with a nonzero declared size, corrupting memory instead of
     // raising a catchable error.
-    self->buf = PyMem_Calloc(nbytes, sizeof(char));
+    self->buf = PyMem_Calloc((size_t) nbytes, sizeof(char));
     if (self->buf == NULL && nbytes > 0) {
         Py_DECREF(self);
         PyErr_NoMemory();
         return NULL;
     }
-    self->buf_size = nbytes;
+    self->buf_size = (Py_ssize_t) nbytes;
 
     self->py_buffer = PyMemoryView_FromMemory(
         self->buf,
@@ -992,7 +1002,7 @@ static PyMemberDef AIOOperation_members[] = {
         READONLY, "offset"
     },
     {
-        "nbytes", T_ULONGLONG,
+        "nbytes", T_PYSSIZET,
         offsetof(AIOOperation, buf_size),
         READONLY, "nbytes"
     },
