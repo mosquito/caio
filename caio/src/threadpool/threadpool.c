@@ -82,6 +82,9 @@ struct threadpool_t {
   int count;
   int shutdown;
   int started;
+  /* Set by threadpool_destroy() when a worker thread destroys its own
+     pool. The last worker to exit then frees the pool. */
+  int free_on_exit;
 };
 
 /**
@@ -112,6 +115,7 @@ threadpool_t *threadpool_create(int thread_count, int queue_size, int flags)
     pool->queue_size = queue_size;
     pool->head = pool->tail = pool->count = 0;
     pool->shutdown = pool->started = 0;
+    pool->free_on_exit = 0;
 
     /* Allocate thread and task queue */
     pool->threads = (pthread_t *)malloc(sizeof(pthread_t) * thread_count);
@@ -199,6 +203,8 @@ int threadpool_add(threadpool_t *pool, void (*function)(void *),
 int threadpool_destroy(threadpool_t *pool, int flags)
 {
     int i, err = 0;
+    int self_in_pool = 0;
+    pthread_t self = pthread_self();
 
     if(pool == NULL) {
         return threadpool_invalid;
@@ -225,19 +231,40 @@ int threadpool_destroy(threadpool_t *pool, int flags)
             break;
         }
 
-        /* Join all worker thread */
+        /* Join all worker threads. The caller can be one of them: a task
+           can release the last reference to the object that owns this
+           pool, so the owner's destructor runs on that worker. A thread
+           cannot join itself (pthread_join returns EDEADLK), which used
+           to skip threadpool_free() and leak the pool and the thread.
+           Detach that thread instead; it frees the pool when it exits
+           (see threadpool_thread). */
         for(i = 0; i < pool->thread_count; i++) {
+            if(pthread_equal(pool->threads[i], self)) {
+                pthread_detach(pool->threads[i]);
+                self_in_pool = 1;
+                continue;
+            }
             if(pthread_join(pool->threads[i], NULL) != 0) {
                 err = threadpool_thread_failure;
             }
         }
     } while(0);
 
-    /* Only if everything went well do we deallocate the pool */
-    if(!err) {
-        threadpool_free(pool);
+    if(err) {
+        return err;
     }
-    return err;
+
+    if(self_in_pool) {
+        /* Every other worker is joined; only the calling worker still
+           runs. It reads free_on_exit under the lock when it exits. */
+        pthread_mutex_lock(&(pool->lock));
+        pool->free_on_exit = 1;
+        pthread_mutex_unlock(&(pool->lock));
+        return 0;
+    }
+
+    threadpool_free(pool);
+    return 0;
 }
 
 int threadpool_free(threadpool_t *pool)
@@ -251,10 +278,11 @@ int threadpool_free(threadpool_t *pool)
         free(pool->threads);
         free(pool->queue);
 
-        /* Because we allocate pool->threads after initializing the
-           mutex and condition variable, we're sure they're
-           initialized. Let's lock the mutex just in case. */
-        pthread_mutex_lock(&(pool->lock));
+        /* pool->threads is allocated after the mutex and the condition
+           variable are initialized, so both exist here. Every worker has
+           been joined (started == 0), so no thread holds the lock. Do not
+           lock it: pthread_mutex_destroy() on a locked mutex is undefined
+           behavior, and ThreadSanitizer reports it on every close(). */
         pthread_mutex_destroy(&(pool->lock));
         pthread_cond_destroy(&(pool->notify));
     }
@@ -298,8 +326,14 @@ static void *threadpool_thread(void *threadpool)
     }
 
     pool->started--;
+    /* The worker that destroyed its own pool frees it once it is the last
+       one out. No other thread touches the pool after this point. */
+    int free_pool = pool->free_on_exit && pool->started == 0;
 
     pthread_mutex_unlock(&(pool->lock));
+    if(free_pool) {
+        threadpool_free(pool);
+    }
     pthread_exit(NULL);
     return(NULL);
 }

@@ -4,8 +4,11 @@ not a bug pattern shared with the other backends, so these don't belong in
 the cross-backend parametrized suite. Skipped outright wherever thread_aio
 itself isn't available.
 """
+import gc
+import sys
 import threading
 import time
+import weakref
 
 import pytest
 
@@ -77,3 +80,73 @@ def test_queue_overflow_allows_retry_with_original_data(tmp_path):
         assert rf.read(len(payload)) == payload, (
             "resubmitted operation must write its ORIGINAL payload, not lost/empty data"
         )
+
+
+def _vm_data_mb():
+    """Virtual data size of this process in MiB, from /proc (Linux only)."""
+    with open("/proc/self/status") as status:
+        for line in status:
+            if line.startswith("VmData:"):
+                return int(line.split()[1]) // 1024
+    raise RuntimeError("VmData not found")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="uses /proc/self/status")
+def test_context_released_by_its_own_worker_frees_the_pool(tmp_path):
+    """A completion callback can drop the last reference to the Context.
+    The worker that runs the callback then runs the Context destructor
+    and tears the pool down from inside one of its own threads.
+
+    pthread_join() of the calling thread fails with EDEADLK. That used to
+    skip freeing the pool, so every such Context leaked its queue and the
+    unjoined worker's 8 MiB stack. VmData counts that memory even though
+    it is never touched, so the growth over 40 iterations is ~360 MiB
+    with the leak and a few MiB without it.
+
+    The callback blocks until the main thread has dropped its reference,
+    so the worker's own DECREF is the last one. On a free-threaded build
+    biased reference counting can still move the dealloc to the owning
+    thread, so this test proves the leak only on GIL builds; it still
+    exercises the teardown path on both.
+    """
+    iterations = 40
+    with open(str(tmp_path / "temp.bin"), "wb+") as f:
+        fd = f.fileno()
+        keep = []
+        dealloc_threads = set()
+
+        def one():
+            done = threading.Event()
+            main_dropped = threading.Event()
+            ctx = thread_aio.Context(max_requests=60000, pool_size=2)
+            weakref.finalize(
+                ctx,
+                lambda: dealloc_threads.add(threading.current_thread().name),
+            )
+            op = thread_aio.Operation.write(b"x", fd, 0)
+
+            def callback(_result):
+                main_dropped.wait(5)
+                done.set()
+
+            op.set_callback(callback)
+            assert ctx.submit(op) == 1
+            del ctx
+            main_dropped.set()
+            assert done.wait(5), "write never completed"
+            keep.append(op)
+
+        one()  # warm up allocator arenas before measuring
+        gc.collect()
+        before = _vm_data_mb()
+        for _ in range(iterations):
+            one()
+        gc.collect()
+        time.sleep(0.2)
+        growth = _vm_data_mb() - before
+
+    assert dealloc_threads, "no Context was deallocated"
+    assert growth < 100, (
+        f"VmData grew by {growth} MiB over {iterations} Contexts released "
+        f"on {sorted(dealloc_threads)} - the pool or a worker stack leaks"
+    )
