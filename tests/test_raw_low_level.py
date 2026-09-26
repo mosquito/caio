@@ -18,7 +18,7 @@ import time
 import weakref
 
 import pytest
-from conftest import drain
+from conftest import drain, import_backend_or_skip
 
 ABSURD_NBYTES = 2**62
 
@@ -379,7 +379,7 @@ def test_linux_aio_operation_context_back_reference_clears_on_completion(tmp_pat
     objects and - until something else eventually dropped the Context -
     the underlying kernel AIO context/eventfd too.
     """
-    linux_aio = pytest.importorskip("caio.linux_aio")
+    linux_aio = import_backend_or_skip("caio.linux_aio")
 
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
@@ -416,7 +416,7 @@ def test_uring_operation_context_back_reference_clears_on_completion(tmp_path):
     mid-flight, munmapping the SQ/CQ rings and closing uring_fd while the
     kernel might still be touching them.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
 
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
@@ -448,7 +448,7 @@ def test_uring_context_stays_alive_via_operation_while_genuinely_in_flight(tmp_p
     op.context clears and nothing else references the Context, so the
     weakref must clear too.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
     import fcntl  # Unix-only; this whole test is uring-only (Linux-only)
 
     F_SETPIPE_SZ = 1031
@@ -509,7 +509,7 @@ def test_linux_aio_context_becomes_collectible_after_operation_completes(tmp_pat
     that one, which plain refcounting alone (as exercised here, with the
     cyclic GC disabled) genuinely cannot free - it needs `gc.collect()`.
     """
-    linux_aio = pytest.importorskip("caio.linux_aio")
+    linux_aio = import_backend_or_skip("caio.linux_aio")
 
     gc.disable()
     try:
@@ -608,7 +608,7 @@ def test_linux_aio_rejects_concurrent_resubmit(tmp_path):
     above: submit() must atomically claim each op, so the kernel never ends
     up with two concurrent iocbs pointing at the very same buffer.
     """
-    linux_aio = pytest.importorskip("caio.linux_aio")
+    linux_aio = import_backend_or_skip("caio.linux_aio")
 
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
@@ -719,7 +719,7 @@ def test_uring_failed_op_not_resubmittable_and_leaves_no_stale_error(tmp_path):
     ever reaching its own, symmetric completion-time error handling - so
     the same scenario can't be driven through linux_aio's public API.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
 
     bad_path = tmp_path / "closed.bin"
     good_path = tmp_path / "good.bin"
@@ -773,7 +773,7 @@ def test_uring_short_read_tail_is_zeroed_not_heap_garbage(tmp_path):
     isn't guaranteed), but this assertion is unconditionally the correct
     behavior regardless.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
 
     nbytes = 256
     for _ in range(64):
@@ -805,7 +805,7 @@ def test_uring_read_resubmit_rejected_and_previous_result_unmutated(tmp_path):
     there is no later kernel write into it. A fresh Operation started
     against the same fd afterward must get its own, independent buffer.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
 
     path = tmp_path / "data.bin"
     path.write_bytes(b"AAAA")
@@ -858,7 +858,7 @@ def test_uring_submit_overflow_does_not_strand_or_leak_prior_ops(tmp_path):
     being asserted on - flaky, not a real bug. Capacity 1 makes "the op
     accepted before the overflow point" unambiguously just `ops[0]`.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
 
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
@@ -891,7 +891,7 @@ def test_uring_reentrant_callback_does_not_double_consume_completion(tmp_path):
     reconstruct the same "kernel-owned" reference a second time, causing a
     double-decref once both reconstructions eventually drop.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
 
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
@@ -935,7 +935,7 @@ def test_linux_aio_submit_type_error_does_not_strand_earlier_ops(tmp_path):
     permanently stuck in_flight - it must never have been touched at all,
     since the whole call raises before anything reaches io_submit().
     """
-    linux_aio = pytest.importorskip("caio.linux_aio")
+    linux_aio = import_backend_or_skip("caio.linux_aio")
 
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
@@ -1062,7 +1062,7 @@ def test_uring_process_events_max_requests_bounds_callbacks_not_just_return_valu
     letting max_requests bound exactly how many of them get delivered per
     call, not just how many get reported.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
     import fcntl  # Unix-only; this whole test is uring-only (Linux-only)
 
     F_SETPIPE_SZ = 1031
@@ -1124,7 +1124,7 @@ def test_uring_process_events_min_requests_ignores_cancel_sentinel(tmp_path):
     would satisfy min_requests=1 immediately, so the call returns 0 real
     completions almost instantly, well before that 0.2s delay elapses.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
     import fcntl  # Unix-only; this whole test is uring-only (Linux-only)
 
     F_SETPIPE_SZ = 1031
@@ -1191,7 +1191,7 @@ def test_uring_context_usable_from_a_different_thread(tmp_path):
     whichever task's io_uring_setup()/io_uring_enter() call created it and
     rejects submission from any other task with -EEXIST.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
 
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
@@ -1230,7 +1230,7 @@ def test_uring_context_drop_does_not_invoke_callbacks(tmp_path):
     available if some other reference to the Operation survives), just
     silently, with no callback call.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
 
     with open(str(tmp_path / "temp.bin"), "wb+") as f:
         fd = f.fileno()
@@ -1318,7 +1318,7 @@ def test_linux_aio_cancel_from_wrong_context_is_rejected(tmp_path):
     it in Engine::cancel() before ever touching that Context's own
     registry.
     """
-    linux_aio = pytest.importorskip("caio.linux_aio")
+    linux_aio = import_backend_or_skip("caio.linux_aio")
 
     path_a = tmp_path / "a.bin"
     path_b = tmp_path / "b.bin"
@@ -1356,7 +1356,7 @@ def test_uring_cancel_from_wrong_context_does_not_disturb_other_context(tmp_path
     own, same-numbered request completes normally and is left untouched by
     a cancel() call made through a different Context.
     """
-    linux_uring = pytest.importorskip("caio.linux_uring")
+    linux_uring = import_backend_or_skip("caio.linux_uring")
 
     path_a = tmp_path / "a.bin"
     path_b = tmp_path / "b.bin"

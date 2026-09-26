@@ -5,11 +5,12 @@ from unittest.mock import Mock
 
 import aiomisc
 import pytest
+from conftest import import_backend_or_skip
 
 
 @aiomisc.timeout(5)
 async def test_linux_uring_asyncio_forwards_context_kwargs():
-    uring_asyncio = pytest.importorskip("caio.linux_uring_asyncio")
+    uring_asyncio = import_backend_or_skip("caio.linux_uring_asyncio")
 
     async with uring_asyncio.AsyncioContext(
         max_requests=8,

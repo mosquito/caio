@@ -1,4 +1,5 @@
 import functools
+import importlib
 import threading
 import time
 import types
@@ -15,6 +16,20 @@ from caio import (
     variants,
     variants_asyncio,
 )
+
+
+def import_backend_or_skip(name):
+    """Import a caio backend module, or skip the test when the host lacks it.
+
+    pytest.importorskip() skips only on ModuleNotFoundError since pytest
+    8.2. A backend whose kernel probe fails (io_uring blocked by seccomp,
+    kernel AIO missing under qemu-user) raises a plain ImportError with an
+    explanation, so importorskip() reports an error instead of a skip.
+    """
+    try:
+        return importlib.import_module(name)
+    except ImportError as exc:
+        pytest.skip(f"{name} is unavailable here: {exc}")
 
 
 class ConcurrentThreads:
