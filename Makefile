@@ -36,7 +36,15 @@ sdist:
 	python3.14t -m venv $@
 	$@/bin/python -m pip install -U pip setuptools build wheel
 
-mac_wheel: .venvs/3.10 .venvs/3.11 .venvs/3.12 .venvs/3.13 .venvs/3.14 .venvs/3.13t .venvs/3.14t
+.venvs/3.15: .venvs
+	python3.15 -m venv $@
+	$@/bin/python -m pip install -U pip setuptools build wheel
+
+.venvs/3.15t: .venvs
+	python3.15t -m venv $@
+	$@/bin/python -m pip install -U pip setuptools build wheel
+
+mac_wheel: .venvs/3.10 .venvs/3.11 .venvs/3.12 .venvs/3.13 .venvs/3.14 .venvs/3.15 .venvs/3.13t .venvs/3.14t .venvs/3.15t
 	.venvs/3.10/bin/python -m build
 	.venvs/3.11/bin/python -m build
 	.venvs/3.12/bin/python -m build
@@ -44,6 +52,8 @@ mac_wheel: .venvs/3.10 .venvs/3.11 .venvs/3.12 .venvs/3.13 .venvs/3.14 .venvs/3.
 	.venvs/3.14/bin/python -m build
 	.venvs/3.13t/bin/python -m build
 	.venvs/3.14t/bin/python -m build
+	.venvs/3.15/bin/python -m build
+	.venvs/3.15t/bin/python -m build
 
 linux_wheel:
 	docker run -it --rm \

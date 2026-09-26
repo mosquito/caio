@@ -44,6 +44,8 @@ jobs:
             os: ubuntu-latest
           - python: "3.14"
             os: ubuntu-latest
+          - python: "3.15"
+            os: ubuntu-latest
           # Fresh build under a free-threaded interpreter. None of the C
           # extensions declare Py_mod_gil yet, so importing one re-enables
           # the GIL by default - PYTHON_GIL=0 below keeps it off anyway so
@@ -55,6 +57,9 @@ jobs:
           - python: "3.14t"
             os: ubuntu-latest
             free_threaded: true
+          - python: "3.15t"
+            os: ubuntu-latest
+            free_threaded: true
           - python: "3.10"
             os: windows-latest
           - python: "3.11"
@@ -62,6 +67,8 @@ jobs:
           - python: "3.13"
             os: windows-latest
           - python: "3.14"
+            os: windows-latest
+          - python: "3.15"
             os: windows-latest
           - python: "3.10"
             os: macos-latest
@@ -72,6 +79,8 @@ jobs:
           - python: "3.13"
             os: macos-latest
           - python: "3.14"
+            os: macos-latest
+          - python: "3.15"
             os: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -110,7 +119,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.13", "3.14"]
+        python: ["3.13", "3.14", "3.15"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
