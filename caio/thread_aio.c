@@ -1012,7 +1012,7 @@ static PyMemberDef AIOOperation_members[] = {
         READONLY, "result"
     },
     {
-        "error", T_INT,
+        "error", T_UBYTE,
         offsetof(AIOOperation, error),
         READONLY, "error"
     },
