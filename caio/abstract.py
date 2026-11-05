@@ -3,6 +3,23 @@ from collections.abc import Callable
 from typing import Any
 
 
+class CloseError(OSError):
+    """A failed native close with an explicit descriptor-ownership outcome.
+
+    fd_closed=False means no close SQE was accepted. True confirms a
+    successful close CQE before an adapter failure. None means a CQE or
+    submission failure cannot prove whether Linux released the fd: owners
+    must discard the numeric fd, never retry it, and surface the error.
+    Owners that must know the outcome even if this exception cannot be
+    allocated should submit their own Operation.close(fd) and read its
+    fd_closed attribute.
+    """
+
+    def __init__(self, error: OSError, *, fd_closed: bool | None):
+        super().__init__(*error.args)
+        self.fd_closed = fd_closed
+
+
 class AbstractContext(abc.ABC):
     @property
     def max_requests(self) -> int:

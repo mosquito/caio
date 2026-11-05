@@ -4,6 +4,9 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
+#include <linux/stat.h>
+#include <sys/sysmacros.h>
 #include <limits.h>
 #include <poll.h>
 #include <stdint.h>
@@ -87,12 +90,36 @@ static inline int io_uring_register(
 #define IORING_ENTER_SQ_WAKEUP      (1U << 1)   /* io_uring_enter: wake SQPOLL thread */
 #endif
 
+/* Linux UAPI enum values (not preprocessor macros). These aliases also
+ * compile with the Linux 5.6 headers required by the read/write backend.
+ * FTRUNCATE is opcode 55, introduced in Linux 6.9; unsupported kernels
+ * report EINVAL through the CQE, never a synchronous syscall fallback. */
+#define CAIO_IORING_OP_RENAMEAT 35
+#define CAIO_IORING_OP_UNLINKAT 36
+#define CAIO_IORING_OP_MKDIRAT 37
+#define CAIO_IORING_OP_SYMLINKAT 38
+#define CAIO_IORING_OP_LINKAT 39
+#define CAIO_IORING_OP_FTRUNCATE 55
+
+#ifndef AT_EMPTY_PATH
+#define AT_EMPTY_PATH 0x1000
+#endif
+
 /* ---- Internal operation opcodes ---- */
 enum URING_OP {
     URING_READ   = 0,
     URING_WRITE  = 1,
     URING_FSYNC  = 2,
     URING_FDSYNC = 3,
+    URING_OPENAT,
+    URING_CLOSE,
+    URING_STATX,
+    URING_FTRUNCATE,
+    URING_MKDIRAT,
+    URING_UNLINKAT,
+    URING_RENAMEAT,
+    URING_LINKAT,
+    URING_SYMLINKAT,
 };
 
 /* user_data sentinel for cancel/internal SQEs (not an AIOOperation pointer) */
@@ -115,6 +142,17 @@ typedef struct {
     PyObject   *callback;
     PyObject   *context;     /* owning Context, held only while in flight */
     PyObject   *weakreflist;
+    PyObject   *path;
+    PyObject   *path2;
+    PyObject   *filename;
+    PyObject   *filename2;
+    struct statx stat;
+    int32_t     dirfd;
+    int32_t     dirfd2;
+    uint32_t    flags;
+    uint32_t    mode;
+    uint32_t    mask;
+    uint8_t     open_claimed;
     uint8_t     opcode;      /* URING_* enum */
     uint32_t    fileno;
     uint64_t    offset;
@@ -133,13 +171,31 @@ static int AIOOperation_traverse(AIOOperation *self, visitproc visit, void *arg)
     Py_VISIT(self->py_buffer);
     Py_VISIT(self->callback);
     Py_VISIT(self->context);
+    Py_VISIT(self->path);
+    Py_VISIT(self->path2);
+    Py_VISIT(self->filename);
+    Py_VISIT(self->filename2);
     return 0;
 }
 
 
 static int AIOOperation_clear(AIOOperation *self) {
+    /* get_value() transfers a successful open exactly once. A caller who
+     * drops a completed low-level operation without claiming its fd must
+     * not leak it. Cancellation in the asyncio adapter instead explicitly
+     * submits CLOSE; this destructor is only the ownership safety net. */
+    if (self->opcode == URING_OPENAT && CAIO_ATOMIC_LOAD(self->done) &&
+        self->result >= 0 && !CAIO_ATOMIC_LOAD_STORE(self->open_claimed, 1)) {
+        int saved_errno = errno;
+        close(self->result);  /* Linux close must never be retried. */
+        errno = saved_errno;
+    }
     Py_CLEAR(self->callback);
     Py_CLEAR(self->context);
+    Py_CLEAR(self->path);
+    Py_CLEAR(self->path2);
+    Py_CLEAR(self->filename);
+    Py_CLEAR(self->filename2);
     /* buf points into py_buffer's internal storage for reads — do NOT free
      * it separately; Py_CLEAR(py_buffer) handles the memory. */
     Py_CLEAR(self->py_buffer);
@@ -174,6 +230,15 @@ static PyObject *AIOOperation_repr(AIOOperation *self) {
         case URING_WRITE:  mode = "write";  break;
         case URING_FSYNC:  mode = "fsync";  break;
         case URING_FDSYNC: mode = "fdsync"; break;
+        case URING_OPENAT: mode = "openat"; break;
+        case URING_CLOSE: mode = "close"; break;
+        case URING_STATX: mode = "statx"; break;
+        case URING_FTRUNCATE: mode = "ftruncate"; break;
+        case URING_MKDIRAT: mode = "mkdirat"; break;
+        case URING_UNLINKAT: mode = "unlinkat"; break;
+        case URING_RENAMEAT: mode = "renameat"; break;
+        case URING_LINKAT: mode = "linkat"; break;
+        case URING_SYMLINKAT: mode = "symlinkat"; break;
         default:           mode = "noop";   break;
     }
     return PyUnicode_FromFormat(
@@ -381,9 +446,246 @@ static PyObject *AIOOperation_fdsync(
 }
 
 
+static AIOOperation *AIOOperation_filesystem_new(PyTypeObject *type, uint8_t opcode) {
+    AIOOperation *self = (AIOOperation *) type->tp_alloc(type, 0);
+    if (self != NULL) {
+        self->opcode = opcode;
+        self->dirfd = AT_FDCWD;
+        self->dirfd2 = AT_FDCWD;
+        self->result = -1;
+    }
+    return self;
+}
+
+static int AIOOperation_path(AIOOperation *self, PyObject *input, int second) {
+    PyObject *filename = PyOS_FSPath(input);
+    PyObject *encoded = NULL;
+    if (filename == NULL)
+        return -1;
+    if (!PyUnicode_FSConverter(filename, &encoded)) {
+        Py_DECREF(filename);
+        return -1;
+    }
+    if (memchr(PyBytes_AS_STRING(encoded), '\0', PyBytes_GET_SIZE(encoded)) != NULL) {
+        Py_DECREF(filename);
+        Py_DECREF(encoded);
+        PyErr_SetString(PyExc_ValueError, "embedded null byte");
+        return -1;
+    }
+    if (second) {
+        self->filename2 = filename;
+        self->path2 = encoded;
+    } else {
+        self->filename = filename;
+        self->path = encoded;
+    }
+    return 0;
+}
+
+static PyObject *AIOOperation_openat(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {"path", "flags", "mode", "dir_fd", NULL};
+    AIOOperation *self = AIOOperation_filesystem_new(type, URING_OPENAT);
+    PyObject *path;
+    int flags;
+    if (self == NULL)
+        return NULL;
+    self->mode = 0666;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "Oi|I$i", kwlist,
+            &path, &flags, &self->mode, &self->dirfd) ||
+        AIOOperation_path(self, path, 0) < 0) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    /* Match os.open(): a returned fd must not survive exec by default. */
+    self->flags = flags | O_CLOEXEC;
+    return (PyObject *) self;
+}
+
+static PyObject *AIOOperation_close_file(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {"fd", NULL};
+    AIOOperation *self = AIOOperation_filesystem_new(type, URING_CLOSE);
+    if (self == NULL)
+        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i", kwlist, &self->dirfd)) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    self->fileno = (uint32_t) self->dirfd;
+    return (PyObject *) self;
+}
+
+static PyObject *AIOOperation_statx(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {"path", "dir_fd", "flags", "mask", NULL};
+    AIOOperation *self = AIOOperation_filesystem_new(type, URING_STATX);
+    PyObject *path;
+    if (self == NULL)
+        return NULL;
+    self->mask = STATX_BASIC_STATS;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|$iII", kwlist,
+            &path, &self->dirfd, &self->flags, &self->mask) ||
+        AIOOperation_path(self, path, 0) < 0) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    if ((self->flags & AT_EMPTY_PATH) && PyBytes_GET_SIZE(self->path) == 0)
+        Py_CLEAR(self->filename);
+    return (PyObject *) self;
+}
+
+static PyObject *AIOOperation_ftruncate(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {"fd", "length", NULL};
+    AIOOperation *self = AIOOperation_filesystem_new(type, URING_FTRUNCATE);
+    long long length = 0;
+    if (self == NULL)
+        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i|L", kwlist,
+            &self->dirfd, &length)) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    self->fileno = (uint32_t) self->dirfd;
+    self->offset = (uint64_t) length;
+    return (PyObject *) self;
+}
+
+static PyObject *AIOOperation_mkdirat(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {"path", "mode", "dir_fd", NULL};
+    AIOOperation *self = AIOOperation_filesystem_new(type, URING_MKDIRAT);
+    PyObject *path;
+    if (self == NULL)
+        return NULL;
+    self->mode = 0777;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|I$i", kwlist,
+            &path, &self->mode, &self->dirfd) ||
+        AIOOperation_path(self, path, 0) < 0) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    return (PyObject *) self;
+}
+
+static PyObject *AIOOperation_unlinkat(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {"path", "dir_fd", "flags", NULL};
+    AIOOperation *self = AIOOperation_filesystem_new(type, URING_UNLINKAT);
+    PyObject *path;
+    if (self == NULL)
+        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|$iI", kwlist,
+            &path, &self->dirfd, &self->flags) ||
+        AIOOperation_path(self, path, 0) < 0) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    return (PyObject *) self;
+}
+
+static PyObject *AIOOperation_two_paths(
+    PyTypeObject *type, PyObject *args, PyObject *kwds, uint8_t opcode
+) {
+    static char *kwlist[] = {"src", "dst", "src_dir_fd", "dst_dir_fd", "flags", NULL};
+    AIOOperation *self = AIOOperation_filesystem_new(type, opcode);
+    PyObject *src, *dst;
+    if (self == NULL)
+        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO|$iiI", kwlist,
+            &src, &dst, &self->dirfd, &self->dirfd2, &self->flags) ||
+        AIOOperation_path(self, src, 0) < 0 ||
+        AIOOperation_path(self, dst, 1) < 0) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    return (PyObject *) self;
+}
+
+static PyObject *AIOOperation_renameat(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    return AIOOperation_two_paths(type, args, kwds, URING_RENAMEAT);
+}
+
+static PyObject *AIOOperation_linkat(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    return AIOOperation_two_paths(type, args, kwds, URING_LINKAT);
+}
+
+static PyObject *AIOOperation_symlinkat(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {"src", "dst", "dir_fd", NULL};
+    AIOOperation *self = AIOOperation_filesystem_new(type, URING_SYMLINKAT);
+    PyObject *src, *dst;
+    if (self == NULL)
+        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO|$i", kwlist,
+            &src, &dst, &self->dirfd) ||
+        AIOOperation_path(self, src, 0) < 0 ||
+        AIOOperation_path(self, dst, 1) < 0) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    return (PyObject *) self;
+}
+
+static int statx_time_ns(PyObject *dict, const char *name, struct statx_timestamp stamp) {
+    PyObject *seconds = PyLong_FromLongLong(stamp.tv_sec);
+    PyObject *scale = PyLong_FromLong(1000000000);
+    PyObject *nanos = PyLong_FromUnsignedLong(stamp.tv_nsec);
+    PyObject *scaled = NULL, *value = NULL;
+    int ret = -1;
+    if (seconds != NULL && scale != NULL && nanos != NULL)
+        scaled = PyNumber_Multiply(seconds, scale);
+    if (scaled != NULL)
+        value = PyNumber_Add(scaled, nanos);
+    if (value != NULL)
+        ret = PyDict_SetItemString(dict, name, value);
+    Py_XDECREF(seconds);
+    Py_XDECREF(scale);
+    Py_XDECREF(nanos);
+    Py_XDECREF(scaled);
+    Py_XDECREF(value);
+    return ret;
+}
+
+static PyObject *AIOOperation_stat_result(AIOOperation *self) {
+    struct statx *st = &self->stat;
+    /* BASIC_STATS fields have stat-compatible values even when a filesystem
+     * clears their mask bits; the Linux statx UAPI explicitly guarantees it. */
+    PyObject *fields = Py_BuildValue("(IKKIIIKLLL)",
+        st->stx_mode, (unsigned long long) st->stx_ino,
+        (unsigned long long) makedev(st->stx_dev_major, st->stx_dev_minor),
+        st->stx_nlink, st->stx_uid, st->stx_gid,
+        (unsigned long long) st->stx_size,
+        (long long) st->stx_atime.tv_sec, (long long) st->stx_mtime.tv_sec,
+        (long long) st->stx_ctime.tv_sec);
+    PyObject *extra = Py_BuildValue("{s:d,s:d,s:d,s:K,s:I,s:K}",
+        "st_atime", (double) st->stx_atime.tv_sec + st->stx_atime.tv_nsec / 1e9,
+        "st_mtime", (double) st->stx_mtime.tv_sec + st->stx_mtime.tv_nsec / 1e9,
+        "st_ctime", (double) st->stx_ctime.tv_sec + st->stx_ctime.tv_nsec / 1e9,
+        "st_rdev", (unsigned long long) makedev(st->stx_rdev_major, st->stx_rdev_minor),
+        "st_blksize", st->stx_blksize, "st_blocks", (unsigned long long) st->stx_blocks);
+    PyObject *os = NULL, *factory = NULL, *result = NULL;
+    if (fields == NULL || extra == NULL)
+        goto done;
+    if (statx_time_ns(extra, "st_atime_ns", st->stx_atime) < 0 ||
+        statx_time_ns(extra, "st_mtime_ns", st->stx_mtime) < 0 ||
+        statx_time_ns(extra, "st_ctime_ns", st->stx_ctime) < 0)
+        goto done;
+    os = PyImport_ImportModule("os");
+    if (os == NULL)
+        goto done;
+    factory = PyObject_GetAttrString(os, "stat_result");
+    if (factory != NULL)
+        result = PyObject_CallFunctionObjArgs(factory, fields, extra, NULL);
+done:
+    Py_XDECREF(fields);
+    Py_XDECREF(extra);
+    Py_XDECREF(os);
+    Py_XDECREF(factory);
+    return result;
+}
+
 PyDoc_STRVAR(AIOOperation_get_value_docstring,
     "Returns the result of the completed Operation.\n\n"
-    "    Operation.get_value() -> Optional[Union[bytes, int]]"
+    "    Operation.get_value() -> bytes | int | os.stat_result | None\n\n"
+    "A successful openat owns its fd until get_value() transfers ownership\n"
+    "exactly once. Unclaimed fds are closed when the operation is destroyed.\n"
+    "Direct submit callers must flush and drain CQEs, even after dropping\n"
+    "their operation reference; the ring retains it until true completion."
 );
 static PyObject *AIOOperation_get_value(
     AIOOperation *self, PyObject *args, PyObject *kwds
@@ -399,12 +701,34 @@ static PyObject *AIOOperation_get_value(
         return NULL;
     }
 
+    if (self->opcode >= URING_OPENAT && !CAIO_ATOMIC_LOAD(self->done)) {
+        PyErr_SetString(PyExc_RuntimeError, "operation has not completed");
+        return NULL;
+    }
     if (self->error != 0) {
+        if (self->opcode >= URING_OPENAT) {
+            errno = self->error;
+            return PyErr_SetFromErrnoWithFilenameObjects(
+                PyExc_OSError, self->filename, self->filename2);
+        }
         PyErr_SetString(PyExc_SystemError, strerror(self->error));
         return NULL;
     }
 
     switch (self->opcode) {
+        case URING_OPENAT: {
+            PyObject *fd = PyLong_FromLong(self->result);
+            if (fd == NULL)
+                return NULL;
+            if (CAIO_ATOMIC_LOAD_STORE(self->open_claimed, 1)) {
+                Py_DECREF(fd);
+                PyErr_SetString(PyExc_RuntimeError, "open fd ownership already transferred");
+                return NULL;
+            }
+            return fd;
+        }
+        case URING_STATX:
+            return AIOOperation_stat_result(self);
         case URING_READ:
             /* py_buffer can only be NULL here if tp_clear() already ran -
              * only possible once this Operation is otherwise unreachable
@@ -478,7 +802,49 @@ static PyObject *AIOOperation_payload_getter(AIOOperation *self, void *closure) 
 }
 
 
+static PyObject *AIOOperation_filesystem_getter(AIOOperation *self, void *closure) {
+    return PyBool_FromLong(self->opcode >= URING_OPENAT);
+}
+
+static PyObject *AIOOperation_opens_file_getter(AIOOperation *self, void *closure) {
+    return PyBool_FromLong(self->opcode == URING_OPENAT);
+}
+
+static PyObject *AIOOperation_closes_file_getter(AIOOperation *self, void *closure) {
+    return PyBool_FromLong(self->opcode == URING_CLOSE);
+}
+
+static PyObject *AIOOperation_submitted_getter(AIOOperation *self, void *closure) {
+    return PyBool_FromLong(CAIO_ATOMIC_LOAD(self->in_progress));
+}
+
+static PyObject *AIOOperation_completed_getter(AIOOperation *self, void *closure) {
+    return PyBool_FromLong(CAIO_ATOMIC_LOAD(self->done));
+}
+
+static PyObject *AIOOperation_fd_closed_getter(AIOOperation *self, void *closure) {
+    if (self->opcode != URING_CLOSE) {
+        PyErr_SetString(PyExc_AttributeError, "fd_closed is defined only for close operations");
+        return NULL;
+    }
+    if (!CAIO_ATOMIC_LOAD(self->in_progress))
+        Py_RETURN_FALSE;
+    if (CAIO_ATOMIC_LOAD(self->done) && self->error == 0)
+        Py_RETURN_TRUE;
+    Py_RETURN_NONE;
+}
+
 static PyGetSetDef AIOOperation_getset[] = {
+    {"is_filesystem", (getter) AIOOperation_filesystem_getter, NULL, "filesystem operation", NULL},
+    {"opens_file", (getter) AIOOperation_opens_file_getter, NULL, "openat operation", NULL},
+    {"closes_file", (getter) AIOOperation_closes_file_getter, NULL, "close operation", NULL},
+    {"submitted", (getter) AIOOperation_submitted_getter, NULL, "SQE has been staged", NULL},
+    {"completed", (getter) AIOOperation_completed_getter, NULL, "true CQE has been drained", NULL},
+    {
+        "fd_closed", (getter) AIOOperation_fd_closed_getter, NULL,
+        "close operations only: False if no SQE was staged, True after a successful "
+        "CQE, otherwise None (the descriptor must be discarded)", NULL
+    },
     {
         "payload", (getter) AIOOperation_payload_getter, NULL,
         "payload", NULL
@@ -515,7 +881,48 @@ static PyMemberDef AIOOperation_members[] = {
     {NULL}
 };
 
+static PyObject *AIOOperation_take_fd_ownership(AIOOperation *self, PyObject *args) {
+    if (self->opcode != URING_OPENAT || !CAIO_ATOMIC_LOAD(self->done) || self->error) {
+        PyErr_SetString(PyExc_RuntimeError, "no completed open fd to transfer");
+        return NULL;
+    }
+    if (CAIO_ATOMIC_LOAD_STORE(self->open_claimed, 1)) {
+        PyErr_SetString(PyExc_RuntimeError, "open fd ownership already transferred");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef AIOOperation_methods[] = {
+    {"_take_fd_ownership", (PyCFunction) AIOOperation_take_fd_ownership, METH_NOARGS,
+        "Transfer an open fd without allocating its Python value (adapter cleanup only)."},
+    {"openat", (PyCFunction) AIOOperation_openat,
+        METH_CLASS | METH_VARARGS | METH_KEYWORDS,
+        "openat(path, flags, mode=0o666, *, dir_fd=-100) -> Operation"},
+    {"close", (PyCFunction) AIOOperation_close_file,
+        METH_CLASS | METH_VARARGS | METH_KEYWORDS,
+        "close(fd) -> Operation"},
+    {"statx", (PyCFunction) AIOOperation_statx,
+        METH_CLASS | METH_VARARGS | METH_KEYWORDS,
+        "statx(path, *, dir_fd=-100, flags=0, mask=0x7ff) -> Operation"},
+    {"ftruncate", (PyCFunction) AIOOperation_ftruncate,
+        METH_CLASS | METH_VARARGS | METH_KEYWORDS,
+        "ftruncate(fd, length=0) -> Operation"},
+    {"mkdirat", (PyCFunction) AIOOperation_mkdirat,
+        METH_CLASS | METH_VARARGS | METH_KEYWORDS,
+        "mkdirat(path, mode=0o777, *, dir_fd=-100) -> Operation"},
+    {"unlinkat", (PyCFunction) AIOOperation_unlinkat,
+        METH_CLASS | METH_VARARGS | METH_KEYWORDS,
+        "unlinkat(path, *, dir_fd=-100, flags=0) -> Operation"},
+    {"renameat", (PyCFunction) AIOOperation_renameat,
+        METH_CLASS | METH_VARARGS | METH_KEYWORDS,
+        "renameat(src, dst, *, src_dir_fd=-100, dst_dir_fd=-100, flags=0) -> Operation"},
+    {"linkat", (PyCFunction) AIOOperation_linkat,
+        METH_CLASS | METH_VARARGS | METH_KEYWORDS,
+        "linkat(src, dst, *, src_dir_fd=-100, dst_dir_fd=-100, flags=0) -> Operation"},
+    {"symlinkat", (PyCFunction) AIOOperation_symlinkat,
+        METH_CLASS | METH_VARARGS | METH_KEYWORDS,
+        "symlinkat(src, dst, *, dir_fd=-100) -> Operation"},
     {
         "read",
         (PyCFunction) AIOOperation_read,
@@ -616,13 +1023,12 @@ typedef struct {
     uint64_t cq_consumed;
 
     PyObject *weakreflist;
+    uint32_t in_flight;
+    uint32_t active_calls;
 } AIOContext;
 
 
-static void AIOContext_dealloc(AIOContext *self) {
-    if (self->weakreflist != NULL)
-        PyObject_ClearWeakRefs((PyObject *) self);
-
+static void AIOContext_release(AIOContext *self) {
     if (self->sq_ring_ptr != MAP_FAILED && self->sq_ring_ptr != NULL)
         munmap(self->sq_ring_ptr, self->sq_ring_size);
     if (self->sqes != MAP_FAILED && self->sqes != NULL)
@@ -636,7 +1042,30 @@ static void AIOContext_dealloc(AIOContext *self) {
     if (self->eventfd_fd >= 0)
         close(self->eventfd_fd);
 
+    self->sq_ring_ptr = MAP_FAILED;
+    self->cq_ring_ptr = MAP_FAILED;
+    self->sqes = MAP_FAILED;
+    self->uring_fd = -1;
+    self->eventfd_fd = -1;
+}
+
+static void AIOContext_dealloc(AIOContext *self) {
+    if (self->weakreflist != NULL)
+        PyObject_ClearWeakRefs((PyObject *) self);
+    AIOContext_release(self);
     Py_TYPE(self)->tp_free((PyObject *) self);
+}
+
+static PyObject *AIOContext_close(AIOContext *self, PyObject *args) {
+    CAIO_BEGIN_CRITICAL_SECTION(self);
+    if (self->in_flight != 0 || self->active_calls != 0) {
+        CAIO_END_CRITICAL_SECTION();
+        PyErr_SetString(PyExc_RuntimeError, "cannot close context with outstanding operations; drain CQEs first");
+        return NULL;
+    }
+    AIOContext_release(self);
+    CAIO_END_CRITICAL_SECTION();
+    Py_RETURN_NONE;
 }
 
 
@@ -873,6 +1302,11 @@ static PyObject *AIOContext_repr(AIOContext *self) {
  */
 static int uring_drain_cq(AIOContext *self, uint32_t max) {
     CAIO_BEGIN_CRITICAL_SECTION(self);  /* released before any callback runs */
+    if (self->uring_fd < 0) {
+        CAIO_END_CRITICAL_SECTION();
+        PyErr_SetString(PyExc_RuntimeError, "context is closed");
+        return -1;
+    }
 
     uint32_t head = __atomic_load_n(self->cq_head, __ATOMIC_RELAXED);
     uint32_t tail = __atomic_load_n(self->cq_tail, __ATOMIC_ACQUIRE);
@@ -919,6 +1353,7 @@ static int uring_drain_cq(AIOContext *self, uint32_t max) {
             op->buf_size = cqe->res;
         }
         Py_CLEAR(op->context);
+        self->in_flight--;
         CAIO_ATOMIC_STORE(op->done, 1);
 
         ops[count] = op;
@@ -989,6 +1424,11 @@ static PyObject *AIOContext_submit(AIOContext *self, PyObject *args) {
     }
 
     CAIO_BEGIN_CRITICAL_SECTION(self);  /* serializes tail/SQE writes */
+    if (self->uring_fd < 0) {
+        CAIO_END_CRITICAL_SECTION();
+        PyErr_SetString(PyExc_RuntimeError, "context is closed");
+        return NULL;
+    }
 
     uint32_t tail     = __atomic_load_n(self->sq_tail, __ATOMIC_RELAXED);
     uint32_t head     = __atomic_load_n(self->sq_head, __ATOMIC_ACQUIRE);
@@ -1042,6 +1482,62 @@ static PyObject *AIOContext_submit(AIOContext *self, PyObject *args) {
                 sqe->opcode       = IORING_OP_FSYNC;
                 sqe->fsync_flags  = IORING_FSYNC_DATASYNC;
                 break;
+            case URING_OPENAT:
+                sqe->opcode = IORING_OP_OPENAT;
+                sqe->fd = op->dirfd;
+                sqe->off = 0;
+                sqe->addr = (uint64_t)(uintptr_t) PyBytes_AS_STRING(op->path);
+                sqe->len = op->mode;
+                sqe->open_flags = op->flags;
+                break;
+            case URING_CLOSE:
+                sqe->opcode = IORING_OP_CLOSE;
+                sqe->fd = op->dirfd;
+                sqe->off = 0;
+                break;
+            case URING_STATX:
+                sqe->opcode = IORING_OP_STATX;
+                sqe->fd = op->dirfd;
+                sqe->addr = (uint64_t)(uintptr_t) PyBytes_AS_STRING(op->path);
+                sqe->off = (uint64_t)(uintptr_t) &op->stat;
+                sqe->len = op->mask;
+                sqe->statx_flags = op->flags;
+                break;
+            case URING_FTRUNCATE:
+                sqe->opcode = CAIO_IORING_OP_FTRUNCATE;
+                sqe->fd = op->dirfd;
+                sqe->off = op->offset;
+                break;
+            case URING_MKDIRAT:
+                sqe->opcode = CAIO_IORING_OP_MKDIRAT;
+                sqe->fd = op->dirfd;
+                sqe->off = 0;
+                sqe->addr = (uint64_t)(uintptr_t) PyBytes_AS_STRING(op->path);
+                sqe->len = op->mode;
+                break;
+            case URING_UNLINKAT:
+                sqe->opcode = CAIO_IORING_OP_UNLINKAT;
+                sqe->fd = op->dirfd;
+                sqe->off = 0;
+                sqe->addr = (uint64_t)(uintptr_t) PyBytes_AS_STRING(op->path);
+                sqe->rw_flags = op->flags;
+                break;
+            case URING_RENAMEAT:
+            case URING_LINKAT:
+                sqe->opcode = op->opcode == URING_RENAMEAT
+                    ? CAIO_IORING_OP_RENAMEAT : CAIO_IORING_OP_LINKAT;
+                sqe->fd = op->dirfd;
+                sqe->addr = (uint64_t)(uintptr_t) PyBytes_AS_STRING(op->path);
+                sqe->off = (uint64_t)(uintptr_t) PyBytes_AS_STRING(op->path2);
+                sqe->len = (uint32_t) op->dirfd2;
+                sqe->rw_flags = op->flags;
+                break;
+            case URING_SYMLINKAT:
+                sqe->opcode = CAIO_IORING_OP_SYMLINKAT;
+                sqe->fd = op->dirfd;
+                sqe->addr = (uint64_t)(uintptr_t) PyBytes_AS_STRING(op->path);
+                sqe->off = (uint64_t)(uintptr_t) PyBytes_AS_STRING(op->path2);
+                break;
             default:
                 /* Unrecognized opcode: give the claim back, this op was
                  * never staged. */
@@ -1064,6 +1560,7 @@ static PyObject *AIOContext_submit(AIOContext *self, PyObject *args) {
         op->context = (PyObject *) self;
         Py_INCREF(self);
 
+        self->in_flight++;
         submitted++;
     }
 
@@ -1132,7 +1629,13 @@ static PyObject *AIOContext_flush(AIOContext *self, PyObject *args) {
     while (remaining > 0) {
         int ret = io_uring_enter(self->uring_fd, remaining, 0, 0, NULL);
         if (ret < 0) {
+            if (errno == EINTR)
+                continue;
             PyErr_SetFromErrno(PyExc_SystemError);
+            return NULL;
+        }
+        if (ret == 0) {
+            PyErr_SetString(PyExc_RuntimeError, "io_uring_enter made no submission progress");
             return NULL;
         }
         remaining -= (uint32_t) ret;
@@ -1166,6 +1669,11 @@ static PyObject *AIOContext_cancel(
         return NULL;
 
     CAIO_BEGIN_CRITICAL_SECTION(self);
+    if (self->uring_fd < 0) {
+        CAIO_END_CRITICAL_SECTION();
+        PyErr_SetString(PyExc_RuntimeError, "context is closed");
+        return NULL;
+    }
 
     uint32_t tail  = __atomic_load_n(self->sq_tail, __ATOMIC_RELAXED);
     uint32_t head  = __atomic_load_n(self->sq_head, __ATOMIC_ACQUIRE);
@@ -1233,6 +1741,10 @@ static PyObject *AIOContext_process_events(
     AIOContext *self, PyObject *args, PyObject *kwds
 ) {
     static char *kwlist[] = {"max_requests", "min_requests", "timeout", NULL};
+    if (self->uring_fd < 0) {
+        PyErr_SetString(PyExc_RuntimeError, "context is closed");
+        return NULL;
+    }
 
     uint32_t max_requests = 0;
     uint32_t min_requests = 0;
@@ -1398,34 +1910,73 @@ static PyMemberDef AIOContext_members[] = {
     {NULL}
 };
 
+static int AIOContext_begin_call(AIOContext *self) {
+    CAIO_BEGIN_CRITICAL_SECTION(self);
+    if (self->uring_fd < 0) {
+        CAIO_END_CRITICAL_SECTION();
+        PyErr_SetString(PyExc_RuntimeError, "context is closed");
+        return -1;
+    }
+    self->active_calls++;
+    CAIO_END_CRITICAL_SECTION();
+    return 0;
+}
+
+static void AIOContext_end_call(AIOContext *self) {
+    CAIO_BEGIN_CRITICAL_SECTION(self);
+    self->active_calls--;
+    CAIO_END_CRITICAL_SECTION();
+}
+
+/* Pin mappings throughout calls that may release the GIL or invoke callbacks.
+ * close() must reject concurrent calls even when the last CQE was retired. */
+#define CAIO_GUARDED_METHOD(name, params, call_args) \
+    static PyObject *AIOContext_guarded_##name params { \
+        if (AIOContext_begin_call(self) < 0) \
+            return NULL; \
+        PyObject *result = AIOContext_##name call_args; \
+        AIOContext_end_call(self); \
+        return result; \
+    }
+
+CAIO_GUARDED_METHOD(submit, (AIOContext *self, PyObject *args), (self, args))
+CAIO_GUARDED_METHOD(flush, (AIOContext *self, PyObject *args), (self, args))
+CAIO_GUARDED_METHOD(cancel, (AIOContext *self, PyObject *args, PyObject *kwds), (self, args, kwds))
+CAIO_GUARDED_METHOD(process_events, (AIOContext *self, PyObject *args, PyObject *kwds), (self, args, kwds))
+CAIO_GUARDED_METHOD(poll, (AIOContext *self, PyObject *args), (self, args))
+
+#undef CAIO_GUARDED_METHOD
+
 static PyMethodDef AIOContext_methods[] = {
+    {"close", (PyCFunction) AIOContext_close, METH_NOARGS,
+        "Release an idle ring. Outstanding operations must be drained first."},
     {
         "submit",
-        (PyCFunction) AIOContext_submit,
+        (PyCFunction) AIOContext_guarded_submit,
         METH_VARARGS,
         AIOContext_submit_docstring
     },
     {
         "flush",
-        (PyCFunction) AIOContext_flush,
+        (PyCFunction) AIOContext_guarded_flush,
         METH_NOARGS,
         AIOContext_flush_docstring
     },
     {
         "cancel",
-        (PyCFunction) AIOContext_cancel,
+        (PyCFunction) AIOContext_guarded_cancel,
         METH_VARARGS | METH_KEYWORDS,
         AIOContext_cancel_docstring
     },
     {
         "process_events",
-        (PyCFunction) AIOContext_process_events,
+        (PyCFunction) AIOContext_guarded_process_events,
         METH_VARARGS | METH_KEYWORDS,
         AIOContext_process_events_docstring
     },
     {
         "poll",
-        (PyCFunction) AIOContext_poll,
+        (PyCFunction) AIOContext_guarded_poll,
         METH_NOARGS,
         AIOContext_poll_docstring
     },
